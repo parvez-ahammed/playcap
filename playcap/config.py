@@ -10,6 +10,9 @@ Precedence, lowest first:
     adapter defaults    Adapter.config_defaults -- what a site/setup needs
     config.json         always wins
 
+obs_ws_url / obs_password missing from config.json are read from OBS's own
+websocket config (detect.obs_settings), so they never have to be copied by hand.
+
 The adapter is the dotted module path in config key "adapter". When the key is
 missing, an optional, untracked `local` package may name one via
 `local.ADAPTER`; that is how a private setup keeps working with a config.json
@@ -22,7 +25,7 @@ import json
 import sys
 from pathlib import Path
 
-from playcap import adapters
+from playcap import adapters, detect
 
 CONFIG_FILE = Path("config.json")
 GENERIC_ADAPTER = "playcap.adapters.html5_video"
@@ -72,6 +75,8 @@ def load(path=None):
     user = json.loads(path.read_text())
     adapter = adapters.load(user.get("adapter") or default_adapter_path())
     cfg = {**DEFAULTS, **adapter.config_defaults, **user}
+    # OBS connection details the user never typed come from OBS itself.
+    cfg["obs_ws_url"], cfg["obs_password"] = detect.obs_settings(user)
     adapter.cfg = cfg
     _cache[key] = (cfg, adapter)
     return cfg, adapter

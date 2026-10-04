@@ -11,33 +11,19 @@ which is what lets the recorder call it again after a browser crash.
 
     python -m playcap.browser
 """
-import shutil
 import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from playcap import config
-
-CANDIDATES = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
-]
-
+from playcap import config, detect
 
 def find_chrome(cfg):
-    if cfg.get("chrome_exe"):
-        return cfg["chrome_exe"]
-    for c in CANDIDATES:
-        if Path(c).exists():
-            return c
-        found = shutil.which(c)
-        if found:
-            return found
-    sys.exit("Chrome not found; set chrome_exe in config.json.")
+    path = detect.resolve("chrome", cfg)
+    if not path:
+        sys.exit("Chrome not found; set chrome_exe in config.json or pick it in the playcap UI.")
+    return path
 
 
 def port_open(port):

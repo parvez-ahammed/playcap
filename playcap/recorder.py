@@ -26,8 +26,16 @@ air and only the newly available ones get recorded. Failed items are retried on
 the next run too; only "done" is permanent.
 
 Black frames: some DRM renders black to screen capture while looking fine on
-screen. The recorder cannot see that from the DOM, so it does not try; rehearse
-with playcap.tools.smoke_test (which checks a captured frame) before a batch.
+screen. The DOM cannot show that, so each poll also asks OBS for a tiny
+screenshot of the program output and records its mean brightness in
+.playcap/now.json; the UI flags a near-zero value. It is a warning, not a
+failure -- rehearse with playcap.tools.smoke_test before a batch.
+
+Live status and stopping (for the UI, see playcap.jobs): every poll writes
+.playcap/now.json (title, position, brightness). A stop-now flag is checked
+every second, also during retry and cooldown waits, and raises
+KeyboardInterrupt so the normal cleanup runs; a stop-after-current flag is
+checked between items. CTRL_BREAK is mapped to KeyboardInterrupt too.
 """
 import argparse
 import json
@@ -38,7 +46,8 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from playcap import cdp, config, organize
+from playcap import cdp, config, jobs, organize
+from playcap.settings import atomic_write_json
 from playcap.adapters.base import VIDEO_STATE_JS, ItemFailed  # noqa: F401
 from playcap.obs_client import Obs, ObsError
 
@@ -57,8 +66,50 @@ PLAYER_WAIT_SECONDS = 45   # how long to wait for the player to appear
 EXIT_FULLSCREEN_JS = ("(async()=>{if(document.fullscreenElement)"
                       " await document.exitFullscreen(); return true;})()")
 
+NOW_FILE = Path(jobs.STATE_DIR) / "now.json"
+
 CFG = {}
 ADAPTER = None
+
+
+def write_now(item, s, duration, luma=None, started=None):
+    """What the UI shows as "now recording". Best effort, never fatal."""
+    try:
+        NOW_FILE.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(NOW_FILE, {
+            "id": str(item.id), "title": item.title, "t": s.get("t"),
+            "duration": duration, "w": s.get("w"), "h": s.get("h"),
+            "luma": luma, "elapsed": (time.time() - started) if started else None,
+            "updated_at": time.time()})
+    except OSError:
+        pass
+
+
+def clear_now():
+    NOW_FILE.unlink(missing_ok=True)
+
+
+def nap(seconds):
+    """time.sleep that a stop-now request interrupts within a second."""
+    end = time.time() + seconds
+    while True:
+        if jobs.requested(Path.cwd(), "record", "now"):
+            raise KeyboardInterrupt("stop requested")
+        left = end - time.time()
+        if left <= 0:
+            return
+        time.sleep(min(1.0, left))
+
+
+def stop_after_current():
+    return jobs.consume(Path.cwd(), "record", "after_current")
+
+
+def program_luma(obs):
+    try:
+        return obs.screenshot_luma(obs.current_scene())
+    except Exception:
+        return None
 
 
 def _setup():
@@ -105,7 +156,9 @@ def load_progress():
 
 
 def save_progress(p):
-    Path(CFG["progress_file"]).write_text(json.dumps(p, indent=1))
+    # Atomic: the UI edits this file too (retry/skip), and a crash mid-write
+    # must never leave half a progress file.
+    atomic_write_json(Path(CFG["progress_file"]), p)
 
 
 def safe_name(item, index):
@@ -310,7 +363,7 @@ def record_one(item, index, obs, speed, args):
 
         reattaches = stall_fixes = 0
         while True:
-            time.sleep(POLL_SECONDS)
+            nap(POLL_SECONDS)
             try:
                 s = state(player)
             except Exception as exc:
@@ -369,6 +422,7 @@ def record_one(item, index, obs, speed, args):
             mins = (time.time() - t_started) / 60
             print(f"    t={s['t']:.0f}/{duration:.0f}s  ({mins:.1f} min elapsed)",
                   flush=True)
+            write_now(item, s, duration, program_luma(obs), t_started)
 
         path = obs.stop_record()
         time.sleep(2)
@@ -469,6 +523,7 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
+    jobs.graceful_signals()
     _setup()
     labels = ADAPTER.labels
     queue = Path(CFG["queue_file"])
@@ -522,6 +577,9 @@ def main(argv=None):
     consecutive = 0
     try:
         for index, it in todo:
+            if stop_after_current():
+                print("stop requested -- finishing here, before the next item")
+                break
             # A stalled item is usually a network blip, and the same blip makes
             # the next few pages render no player at all. Retrying with a pause
             # turns a 10-item cascade of false failures into a short delay.
@@ -551,7 +609,7 @@ def main(argv=None):
                     if attempt < MAX_ATTEMPTS:
                         print(f"    retrying in {RETRY_WAIT_SECONDS}s "
                               f"(attempt {attempt + 1}/{MAX_ATTEMPTS})")
-                        time.sleep(RETRY_WAIT_SECONDS)
+                        nap(RETRY_WAIT_SECONDS)
                         continue
                     progress[it.id] = {
                         "status": "failed", "title": it.title,
@@ -564,7 +622,7 @@ def main(argv=None):
                 # marching through the queue turning every item into a failure.
                 print(f"{consecutive} failures in a row -- pausing "
                       f"{COOLDOWN_SECONDS // 60} min before continuing")
-                time.sleep(COOLDOWN_SECONDS)
+                nap(COOLDOWN_SECONDS)
                 consecutive = 0
     except KeyboardInterrupt:
         print("\ninterrupted -- stopping the recording cleanly")
@@ -576,6 +634,8 @@ def main(argv=None):
         save_progress(progress)
     finally:
         obs.close()
+        clear_now()
+        jobs.clear_flags(Path.cwd(), "record")
 
     done = sum(1 for v in progress.values() if v["status"] == "done")
     failed = [v for v in progress.values() if v["status"] == "failed"]

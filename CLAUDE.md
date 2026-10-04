@@ -5,7 +5,7 @@ CDP, captures the screen with OBS until the page's `<video>` ends, then re-encod
 the results as a Jellyfin/Emby TV series. The core is generic. Everything site-specific
 goes through an adapter.
 
-No tests. Only the scripts are tracked: `.gitignore` excludes `local/`, `chrome-profile/`,
+Tests: `python -m pytest tests -q` (stdlib + pytest; no OBS/Chrome needed). Only the scripts are tracked: `.gitignore` excludes `local/`, `chrome-profile/`,
 `browser-profile/`, `config.json`, the state JSON and the logs. **Git will not bring back a
 deleted recording.** Prefer additive changes, and never delete recordings or
 `progress.json` to "clean up".
@@ -18,12 +18,21 @@ playcap/                 generic core. No site names anywhere in it.
   adapters/base.py       Adapter interface, Item, Player
   adapters/html5_video.py  public adapter: queue = URL list file, player = first <video>
   recorder.py            record loop (CDP click -> fullscreen -> OBS -> poll <video> -> finalize)
-  build_queue.py optimize.py organize.py status.py control.py browser.py
+  build_queue.py optimize.py organize.py status.py browser.py
   cdp.py obs_client.py   minimal DevTools / obs-websocket v5 clients
+  ui/                    the UI: server.py (JSON API, Host/Origin/token guards) + index.html/app.js/style.css
+  detect.py              finds Chrome/OBS/ffmpeg/ffprobe; reads OBS's websocket config
+  settings.py            validated, atomic config.json saves for the UI
+  jobs.py                start/stop jobs: PID files, stop flags in .playcap/, CTRL_BREAK, kill
+  state.py               one snapshot for the UI (items, library, health, problems)
+  obs_setup.py           idempotent OBS scene/capture setup; enables OBS websocket while OBS is closed
+  control.py             old entry point, now opens the UI
   tools/                 smoke_test, inspect_live, probe (generic diagnostics)
 record_all.py build_queue.py optimize.py organize.py status.py control.py
                          thin root wrappers so the old commands still work
 examples/demo/           test-pattern page + queue + config. Try playcap with no real site.
+tests/                   pytest suite
+playcap.bat              double-click launcher for the UI (Windows)
 local/                   PRIVATE, GITIGNORED: the owner's site adapter and launchers
 ```
 
@@ -74,3 +83,15 @@ no device-limit workarounds.
 - Verify before destroying, not after. The 14 archived originals were each decoded frame by
   frame before being deleted. Every `optimize.json` entry carries `original_deleted` with the
   evidence that justified it. One file failed that check and was rebuilt instead of trusted.
+
+## UI rules
+
+- `python -m playcap ui` (root = current folder). Never call `config.load()` from UI code: it
+  exits when config.json is missing and caches per process; use `settings.read` / `state._effective`.
+- Stops are layered (flag file -> CTRL_BREAK -> kill). The recorder checks
+  `.playcap/record.now` every second and `.playcap/record.after_current` between items; the
+  optimizer checks `.playcap/optimize.now`. Keep those checks if you touch the loops.
+- Queue edits (retry/skip) are refused while recording: the recorder rewrites the progress file
+  after every item from memory.
+- The page inserts data with textContent only. Keep it that way.
+

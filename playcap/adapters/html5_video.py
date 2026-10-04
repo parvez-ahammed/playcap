@@ -114,6 +114,13 @@ def read_queue_source(path):
 
 class Adapter(Base):
     config_defaults = {"queue_source": "queue.txt"}
+    label = "List of links"
+    setup_fields = [{
+        "key": "links", "kind": "links",
+        "label": "Pages to record, one per line",
+        "help": "A page URL per line, or \"Title | URL\". Each page must play an HTML5 video "
+                "in the playcap browser window.",
+    }]
 
     def build_queue(self, cfg, argv):
         src = argv[0] if argv else cfg.get("queue_source")

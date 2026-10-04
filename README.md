@@ -26,18 +26,45 @@ playcap is built for long, unattended runs:
   not re-encoded.
 - **Jellyfin/Emby filing.** Episodes are named `SxxEyy - Title` with `.nfo`
   sidecars for the untruncated title, air date and description.
-- **Local control panel.** A dashboard on `127.0.0.1` with start/stop buttons,
-  protected against cross-site requests.
+- **Simple local UI.** A setup wizard that finds Chrome, OBS and ffmpeg for
+  you and configures OBS itself, then one screen to start/stop recording,
+  watch progress (including a black-capture warning), retry or skip items and
+  shrink the library. Runs on `127.0.0.1`, protected against cross-site requests.
 
 ## Requirements
 
 - Python 3.10+ and `pip install requests websocket-client` (or `pip install .`)
 - Google Chrome or Chromium
-- [OBS Studio](https://obsproject.com/) 28+ with the WebSocket server enabled
-  (Tools -> WebSocket Server Settings), and a scene that captures your screen
+- [OBS Studio](https://obsproject.com/) 28+ (the UI switches its WebSocket
+  server on and creates a screen-capture scene for you)
 - ffmpeg and ffprobe
 
-## Quick start (bundled demo, no real site)
+## Quick start: the UI
+
+```
+pip install .            # or: pip install requests websocket-client
+playcap ui               # or: python -m playcap ui   (Windows: double-click playcap.bat)
+```
+
+Your browser opens on http://127.0.0.1:8765. The first time, a three-step wizard
+asks for:
+
+1. **Tools** -- Chrome, OBS, ffmpeg and ffprobe are found automatically; change a
+   path only if it picked the wrong one. *Launch OBS* turns on OBS's websocket
+   (by editing OBS's own settings while it is closed) and *Set up recording
+   scene* adds a full-screen capture scene.
+2. **What to record** -- paste page URLs, one per line (`Title | URL` also works).
+3. **Library** -- where recordings go and what the series is called.
+
+Then: *Open browser* (log in to your site in that window once -- playcap never
+handles passwords), *Refresh queue*, *Start recording*. *Stop after this one*
+finishes the item in flight; *Stop now* discards it and keeps it queued.
+*Shrink library* re-encodes finished recordings. Settings live in `config.json`
+in the folder you started the UI from; you never have to edit it.
+
+Jobs keep running if you close the UI; reopening it picks them up again.
+
+## Quick start: command line (bundled demo, no real site)
 
 `examples/demo/` has a page that plays a six-second generated test pattern,
 plus a queue file and a config.
@@ -77,7 +104,7 @@ Closing panel | https://example.org/talks/closing-panel
 | `python optimize.py [--verify] [--only TEXT] [--crf 24]` | Verified in-place re-encode |
 | `python organize.py [--dry-run]` | Rename to `SxxEyy` and write `.nfo` files |
 | `python status.py [--watch]` | Write `status.html` |
-| `python control.py` | Control panel on http://127.0.0.1:8765 |
+| `python -m playcap ui` (or `playcap ui`, `python control.py`) | The UI on http://127.0.0.1:8765 |
 | `python -m playcap.tools.smoke_test URL` | Rehearse one page end to end |
 | `python -m playcap.tools.inspect_live` | Show what the `<video>` in each open tab reports |
 | `python -m playcap.tools.probe URL` | Log how a page delivers its video |

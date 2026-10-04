@@ -37,3 +37,7 @@ __pycache__/
 
 # Private Claude notes about local/
 CLAUDE.local.md
+
+# Packaging build output
+build/
+*.egg-info/

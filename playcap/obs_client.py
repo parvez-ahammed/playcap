@@ -8,6 +8,7 @@ response (op 7) pairs matched by requestId.
 import base64
 import hashlib
 import json
+import struct
 import time
 
 import websocket
@@ -17,6 +18,30 @@ DEFAULT_URL = "ws://127.0.0.1:4455"
 
 class ObsError(RuntimeError):
     pass
+
+
+def bmp_mean_luma(data):
+    """Mean Rec.601 luma (0-255) of an uncompressed 24/32-bit BMP, or None.
+    BMP because OBS can emit it and it needs no image library to read."""
+    try:
+        if data[:2] != b"BM":
+            return None
+        offset = struct.unpack_from("<I", data, 10)[0]
+        width, height = struct.unpack_from("<ii", data, 18)
+        bpp = struct.unpack_from("<H", data, 28)[0]
+        if bpp not in (24, 32) or width <= 0 or height == 0:
+            return None
+        step = bpp // 8
+        stride = (width * step + 3) & ~3
+        total = 0.0
+        for row in range(abs(height)):
+            base = offset + row * stride
+            for col in range(width):
+                b, g, r = data[base + col * step: base + col * step + 3]
+                total += 0.299 * r + 0.587 * g + 0.114 * b
+        return total / (width * abs(height))
+    except (struct.error, ValueError, IndexError):
+        return None
 
 
 class Obs:
@@ -88,6 +113,15 @@ class Obs:
 
     def scene_items(self, scene):
         return self.request("GetSceneItemList", {"sceneName": scene})["sceneItems"]
+
+    def screenshot_luma(self, source, width=64, height=36):
+        """How bright the program output is right now (0 = black). A DRM
+        player that renders black to capture shows up here as ~0."""
+        data = self.request("GetSourceScreenshot", {
+            "sourceName": source, "imageFormat": "bmp",
+            "imageWidth": width, "imageHeight": height}).get("imageData", "")
+        _, _, b64 = data.partition(",")
+        return bmp_mean_luma(base64.b64decode(b64)) if b64 else None
 
     def close(self):
         try:

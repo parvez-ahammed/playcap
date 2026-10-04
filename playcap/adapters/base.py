@@ -81,6 +81,11 @@ class Adapter:
     #: merged under config.json (config.json wins)
     config_defaults: dict = {}
 
+    #: how the setup UI names this source, and the few fields it asks for:
+    #: [{"key", "label", "kind": "text" | "url" | "links", "help"?}]
+    label: str = "Custom adapter"
+    setup_fields: list = []
+
     #: wording used in plans and the dashboard
     labels = {
         "locked": "locked",

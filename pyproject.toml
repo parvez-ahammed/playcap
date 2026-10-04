@@ -19,7 +19,11 @@ classifiers = [
     "Topic :: Multimedia :: Video :: Capture",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
 [project.scripts]
+playcap = "playcap.__main__:main"
 playcap-browser = "playcap.browser:main"
 playcap-queue = "playcap.build_queue:main"
 playcap-record = "playcap.recorder:main"
@@ -30,3 +34,6 @@ playcap-control = "playcap.control:main"
 
 [tool.setuptools.packages.find]
 include = ["playcap*"]
+
+[tool.setuptools.package-data]
+"playcap.ui" = ["*.html", "*.js", "*.css"]

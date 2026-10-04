@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="playcap-token" content="{{TOKEN}}">
+<title>playcap</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo" aria-hidden="true"></span>playcap<span id="showname" class="showname"></span></div>
+  <div id="health" class="health" aria-live="polite"></div>
+  <button id="settings-btn" class="btn ghost" hidden>Settings</button>
+</header>
+
+<main>
+  <!-- ============ setup wizard ============ -->
+  <section id="wizard" class="wizard" hidden>
+    <ol class="stepper">
+      <li data-step="1">Tools</li>
+      <li data-step="2">What to record</li>
+      <li data-step="3">Library</li>
+    </ol>
+
+    <div class="card step" data-step="1">
+      <h2>Tools</h2>
+      <p class="muted">playcap found these on your computer. Change a path only if it picked the wrong one.</p>
+      <div id="tools" class="tools"></div>
+      <div class="obsbox">
+        <div>
+          <h3>OBS</h3>
+          <p id="obs-status" class="muted">Checking…</p>
+        </div>
+        <div class="row">
+          <button id="obs-launch" class="btn">Launch OBS</button>
+          <button id="obs-setup" class="btn">Set up recording scene</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card step" data-step="2" hidden>
+      <h2>What to record</h2>
+      <div id="sources" class="sources" role="radiogroup"></div>
+      <div id="source-fields"></div>
+    </div>
+
+    <div class="card step" data-step="3" hidden>
+      <h2>Library</h2>
+      <label class="field">
+        <span>Save recordings in</span>
+        <div class="row">
+          <input id="output_dir" type="text" spellcheck="false">
+          <button class="btn" data-browse="output_dir" data-kind="folder">Browse…</button>
+        </div>
+        <small class="err" data-err="output_dir"></small>
+      </label>
+      <label class="field">
+        <span>Library name <small class="muted">(shown as the series name in Jellyfin/Emby)</small></span>
+        <input id="show" type="text">
+        <small class="err" data-err="show"></small>
+      </label>
+    </div>
+
+    <div class="wizard-nav">
+      <button id="wiz-cancel" class="btn ghost" hidden>Cancel</button>
+      <span class="spacer"></span>
+      <button id="wiz-back" class="btn">Back</button>
+      <button id="wiz-next" class="btn primary">Next</button>
+    </div>
+  </section>
+
+  <!-- ============ dashboard ============ -->
+  <section id="dash" hidden>
+    <ul id="problems" class="problems"></ul>
+
+    <div class="card controls">
+      <div class="group">
+        <h3>Recording</h3>
+        <div class="row wrap">
+          <button id="rec-start" class="btn primary big">Start recording</button>
+          <button id="rec-stop-after" class="btn" hidden>Stop after this one</button>
+          <button id="rec-stop-now" class="btn danger" hidden>Stop now</button>
+          <button id="rec-kill" class="btn danger" hidden>Force stop</button>
+        </div>
+        <p id="rec-note" class="muted small"></p>
+      </div>
+      <div class="group">
+        <h3>Library</h3>
+        <div class="row wrap">
+          <button id="opt-start" class="btn big">Shrink library</button>
+          <button id="opt-stop" class="btn danger" hidden>Stop shrinking</button>
+          <button id="opt-kill" class="btn danger" hidden>Force stop</button>
+        </div>
+        <p id="opt-note" class="muted small">Re-encodes recordings to about a third of the size. Originals are kept until each new file is checked.</p>
+      </div>
+      <div class="group">
+        <h3>Browser &amp; queue</h3>
+        <div class="row wrap">
+          <button id="browser-start" class="btn">Open browser</button>
+          <button id="queue-start" class="btn">Refresh queue</button>
+        </div>
+        <p class="muted small">Log in to your site in the playcap browser window once; playcap never handles passwords.</p>
+      </div>
+    </div>
+
+    <div id="now" class="card now" hidden>
+      <div class="now-head"><span class="pulse"></span><h3>Recording now</h3></div>
+      <div id="now-title" class="now-title"></div>
+      <div class="progress"><div id="now-bar"></div></div>
+      <div id="now-meta" class="muted small"></div>
+      <div id="now-black" class="warn" hidden>The capture looks black. Some protected players hide from screen capture — check the OBS preview.</div>
+    </div>
+
+    <div id="encode" class="card now" hidden>
+      <div class="now-head"><span class="pulse alt"></span><h3>Shrinking library</h3></div>
+      <div id="encode-meta" class="muted"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Queue</h3>
+        <div id="queue-tabs" class="tabs" role="tablist"></div>
+      </div>
+      <table class="list">
+        <thead><tr><th>Item</th><th class="nowrap">Date</th><th>State</th><th></th></tr></thead>
+        <tbody id="queue-body"></tbody>
+      </table>
+      <p id="queue-empty" class="muted" hidden></p>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Library</h3><span id="lib-summary" class="muted"></span></div>
+      <table class="list">
+        <thead><tr><th>Episode</th><th class="num">Size</th><th>Shrunk</th></tr></thead>
+        <tbody id="lib-body"></tbody>
+      </table>
+    </div>
+
+    <details class="card logs">
+      <summary>Logs</summary>
+      <div id="logs"></div>
+    </details>
+  </section>
+</main>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

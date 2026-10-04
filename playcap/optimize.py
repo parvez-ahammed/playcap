@@ -39,6 +39,11 @@ clean both times. Copying costs ~3% size and is bit-exact.
 Binaries come from config: "encode_ffmpeg" (falls back to "ffmpeg") and
 "ffprobe".
 
+Stopping (see playcap.jobs): a stop-now flag is checked every second while
+ffmpeg runs, and CTRL_BREAK raises KeyboardInterrupt. Either way ffmpeg is
+stopped, the half-written sidecar is deleted, the episode is NOT marked
+failed, and the source is untouched -- a rerun picks the episode up again.
+
     python optimize.py                 # encode everything not done yet
     python optimize.py --only S01E09   # one episode (substring match)
     python optimize.py --crf 23        # higher quality, bigger
@@ -56,7 +61,8 @@ import sys
 import time
 from pathlib import Path
 
-from playcap import config
+from playcap import config, jobs
+from playcap.settings import atomic_write_json
 
 # Filled in by _setup() from config.json, so importing needs no config.
 CFG = {}
@@ -160,11 +166,44 @@ def encode(src, dst, crf, preset):
            "-pix_fmt", "yuv420p",
            *audio_args(src),
            "-movflags", "+faststart", "-f", "mp4", str(tmp)]
+    cmd.insert(1, "-nostdin")
     started = time.time()
     idle = getattr(subprocess, "IDLE_PRIORITY_CLASS", 0)
-    if subprocess.run(cmd, creationflags=idle).returncode != 0:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError("ffmpeg failed")
+    proc = subprocess.Popen(cmd, creationflags=idle, stdin=subprocess.DEVNULL)
+    try:
+        while True:
+            try:
+                code = proc.wait(timeout=1)
+                break
+            except subprocess.TimeoutExpired:
+                if jobs.requested(Path.cwd(), "optimize", "now"):
+                    raise KeyboardInterrupt("stop requested")
+        if code != 0:
+            if jobs.requested(Path.cwd(), "optimize", "now"):
+                raise KeyboardInterrupt("stop requested")   # ffmpeg got the break first
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError("ffmpeg failed")
+    except BaseException:
+        if proc.poll() is None:
+            if sys.platform.startswith("win"):
+                # The whole tree: a wrapper (ffmpeg.cmd/.bat shim) would
+                # otherwise leave the real encoder running with the file open.
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                               capture_output=True)
+            else:
+                proc.terminate()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        for _ in range(20):                  # the file handle may linger briefly
+            try:
+                tmp.unlink(missing_ok=True)
+                break
+            except OSError:
+                time.sleep(0.5)
+        raise
     return time.time() - started, tmp
 
 
@@ -181,7 +220,21 @@ def gb(path):
     return path.stat().st_size / 1024 ** 3
 
 
+def save_state(state):
+    atomic_write_json(STATE, state)
+
+
 def main(argv=None):
+    jobs.graceful_signals()
+    try:
+        _run(argv)
+    except KeyboardInterrupt:
+        print("stopped -- the episode in progress was left as it was; rerun to continue")
+    finally:
+        jobs.clear_flags(Path.cwd(), "optimize")
+
+
+def _run(argv=None):
     _setup()
     ap = argparse.ArgumentParser()
     ap.add_argument("--crf", type=int, default=24)
@@ -202,6 +255,8 @@ def main(argv=None):
 
     before_total = after_total = 0.0
     for i, src in enumerate(todo, 1):
+        if jobs.requested(Path.cwd(), "optimize", "now"):
+            raise KeyboardInterrupt("stop requested")
         dst = in_library(src)
         print(f"[{i}/{len(todo)}] {src.stem}")
         source_gb = gb(src)
@@ -218,7 +273,7 @@ def main(argv=None):
             except RuntimeError as exc:
                 print(f"    !! {exc}")
                 state[src.name] = {"status": "failed", "error": str(exc)}
-                STATE.write_text(json.dumps(state, indent=1))
+                save_state(state)
                 continue
             ok, why = verify(src, tmp)
             print(f"    encoded in {took / 60:.1f} min")
@@ -226,7 +281,7 @@ def main(argv=None):
                 tmp.unlink(missing_ok=True)
                 print(f"    !! not usable, original untouched: {why}")
                 state[src.name] = {"status": "failed", "error": why}
-                STATE.write_text(json.dumps(state, indent=1))
+                save_state(state)
                 continue
             if in_place:
                 # Same name: the source must leave before the encode moves in.
@@ -249,7 +304,7 @@ def main(argv=None):
         elif not args.keep and ARCHIVE not in src.parents:
             state[src.name]["original"] = str(archive(src))
             print("    original archived")
-        STATE.write_text(json.dumps(state, indent=1))
+        save_state(state)
 
     if before_total:
         print(f"\n{before_total:.1f} GB -> {after_total:.1f} GB "
