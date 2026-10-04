@@ -108,8 +108,17 @@ def edit_item(root, action, item_id):
 def setup_info(root):
     cfg = settings.read(root)
     ws = detect.obs_websocket()
+    # Show what the pipeline will actually use (defaults < adapter defaults <
+    # config.json), so the wizard never offers a placeholder that would
+    # overwrite an adapter's own default when saved.
+    try:
+        shown, _ = state._effective(cfg)
+    except Exception:
+        shown = dict(cfg)
+    shown = {k: v for k, v in shown.items() if k != "obs_password" and not isinstance(v, list)}
+    shown["adapter"] = settings.effective_adapter(cfg)
     info = {
-        "config": {k: v for k, v in cfg.items() if k != "obs_password"},
+        "config": shown,
         "has_obs_password": bool(cfg.get("obs_password")),
         "tools": detect.report(cfg),
         "obs": ({"url": ws["url"], "enabled": ws["enabled"],

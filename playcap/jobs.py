@@ -37,7 +37,7 @@ import sys
 import time
 from pathlib import Path
 
-from playcap import adapters
+from playcap import adapters, settings
 
 STATE_DIR = ".playcap"
 NAMES = ("browser", "queue", "record", "optimize")
@@ -158,8 +158,7 @@ def status(root):
 # --- start / stop ----------------------------------------------------------------
 def command(name, cfg):
     if name == "browser":
-        from playcap import config
-        adapter = adapters.load(cfg.get("adapter") or config.default_adapter_path())
+        adapter = adapters.load(settings.effective_adapter(cfg))
         adapter.cfg = cfg
         return adapter.browser_command()
     return [sys.executable, "-u", "-m", MODULES[name]]

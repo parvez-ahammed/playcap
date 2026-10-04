@@ -56,7 +56,15 @@ def read(root):
 
 
 def is_configured(cfg):
-    return bool(cfg.get("adapter") and cfg.get("output_dir"))
+    """An output folder is the one thing nothing can default. The adapter may
+    be left out: like config.load(), it then falls back to local.ADAPTER or
+    the generic adapter (effective_adapter)."""
+    return bool(cfg.get("output_dir"))
+
+
+def effective_adapter(cfg):
+    from playcap import config   # deferred: config imports detect, not settings
+    return cfg.get("adapter") or config.default_adapter_path()
 
 
 def adapters_available():

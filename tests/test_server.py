@@ -182,3 +182,23 @@ def test_enable_websocket_creates_config_with_password(tmp_path):
     f = tmp_path / "obs-studio/plugin_config/obs-websocket/config.json"
     data = json.loads(f.read_text())
     assert data["server_enabled"] and data["auth_required"] and len(data["server_password"]) >= 16
+
+
+def test_setup_reports_effective_adapter_for_old_config(ui):
+    root, port = ui
+    from playcap import config
+    (root / "config.json").write_text(json.dumps({"output_dir": str(root / "out")}))
+    status, info = call(port, "GET", "/api/setup")
+    assert info["config"]["adapter"] == config.default_adapter_path()
+    status, snap = call(port, "GET", "/api/state")
+    assert snap["configured"] is True
+
+
+def test_setup_shows_adapter_defaults_not_placeholders(ui):
+    root, port = ui
+    (root / "config.json").write_text(json.dumps({
+        "adapter": "playcap.adapters.html5_video", "output_dir": str(root / "out")}))
+    status, info = call(port, "GET", "/api/setup")
+    from playcap import config
+    assert info["config"]["show"] == config.DEFAULTS["show"]
+    assert info["config"]["queue_source"] == "queue.txt"     # adapter default

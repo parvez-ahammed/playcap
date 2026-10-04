@@ -80,3 +80,11 @@ def test_adapters_available_has_generic(tmp_path):
 def test_configured_flag(tmp_path):
     assert settings.is_configured({}) is False
     assert settings.is_configured({"adapter": "x", "output_dir": "y"}) is True
+    # an older config.json without "adapter" still counts: the pipeline falls back too
+    assert settings.is_configured({"output_dir": "y"}) is True
+
+
+def test_effective_adapter_falls_back_like_config_load():
+    from playcap import config
+    assert settings.effective_adapter({"adapter": "a.b"}) == "a.b"
+    assert settings.effective_adapter({}) == config.default_adapter_path()

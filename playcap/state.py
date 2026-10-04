@@ -79,7 +79,7 @@ def check_obs(url, password):
 def _effective(cfg):
     """config.load()'s merge (defaults < adapter defaults < config.json),
     without its exit-on-missing and per-process cache."""
-    adapter = adapters.load(cfg.get("adapter") or config.default_adapter_path())
+    adapter = adapters.load(settings.effective_adapter(cfg))
     merged = {**config.DEFAULTS, **adapter.config_defaults, **cfg}
     adapter.cfg = merged
     return merged, adapter
@@ -219,7 +219,7 @@ def snapshot(root):
             "health": {"browser": False, "obs": False, "obs_message": "",
                        "disk_gb": None},
             "jobs": jobs.status(root), "external": {}, "log": {},
-            "show": raw_cfg.get("show"), "source": raw_cfg.get("adapter"),
+            "show": raw_cfg.get("show"), "source": settings.effective_adapter(raw_cfg),
             "generated": time.time()}
     problems = snap["problems"]
     if not snap["configured"]:
