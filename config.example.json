@@ -1,0 +1,32 @@
+{
+  "adapter": "playcap.adapters.html5_video",
+  "queue_source": "queue.txt",
+
+  "chrome_debug_port": 9222,
+  "chrome_exe": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "browser_profile": "browser-profile",
+
+  "obs_ws_url": "ws://127.0.0.1:4455",
+  "obs_password": "<obs-websocket password>",
+  "obs_exe": "C:/Program Files/obs-studio/bin/64bit/obs64.exe",
+  "video_bitrate_kbps": 2500,
+  "x264_settings": "keyint=60:min-keyint=60:scenecut=0",
+  "x264_preset": "veryfast",
+
+  "ffmpeg": "ffmpeg",
+  "encode_ffmpeg": "ffmpeg",
+  "ffprobe": "ffprobe",
+
+  "output_dir": "recordings",
+  "queue_file": "queue.json",
+  "progress_file": "progress.json",
+  "optimize_state": "optimize.json",
+
+  "show": "My Recordings",
+  "season": 1,
+  "title_cleanup": ["\\s*\\|\\s*My Site$"],
+  "title_collapse_restated": false,
+  "title_max_len": 80,
+  "show_plot": "",
+  "show_premiered": ""
+}

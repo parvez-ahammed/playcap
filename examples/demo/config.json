@@ -1,0 +1,16 @@
+{
+  "adapter": "playcap.adapters.html5_video",
+  "queue_source": "queue.txt",
+  "queue_file": "queue.json",
+  "progress_file": "progress.json",
+  "optimize_state": "optimize.json",
+  "output_dir": "recordings",
+  "show": "playcap demo",
+  "season": 1,
+  "avg_item_minutes": 1,
+  "chrome_debug_port": 9222,
+  "obs_ws_url": "ws://127.0.0.1:4455",
+  "obs_password": "",
+  "ffmpeg": "ffmpeg",
+  "ffprobe": "ffprobe"
+}

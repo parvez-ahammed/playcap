@@ -1,0 +1,3 @@
+# playcap demo queue: one entry per line, "Title | url-or-path".
+# Relative paths resolve against this file and become file:// URLs.
+Demo test pattern | index.html
