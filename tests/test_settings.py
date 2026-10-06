@@ -88,3 +88,13 @@ def test_effective_adapter_falls_back_like_config_load():
     from playcap import config
     assert settings.effective_adapter({"adapter": "a.b"}) == "a.b"
     assert settings.effective_adapter({}) == config.default_adapter_path()
+
+
+def test_recording_quality_is_validated_and_stored_as_numbers(tmp_path):
+    from playcap import settings
+    cfg, errors = settings.save(tmp_path, {"record_crf": 50})
+    assert "record_crf" in errors
+    cfg, errors = settings.save(tmp_path, {"record_mode": "quality", "record_crf": "26",
+                                           "x264_preset": "fast", "keyframe_seconds": "2"})
+    assert errors == {}
+    assert cfg["record_crf"] == 26 and cfg["keyframe_seconds"] == 2

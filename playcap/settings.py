@@ -15,6 +15,10 @@ not given -- a hand-written config.json with extra keys survives the UI.
 Writes go to a temp file in the same directory and are swapped in with
 os.replace, so a crash mid-save leaves the old file, never half of a new one.
 
+Recording-quality keys (record_mode, record_crf, video_bitrate_kbps,
+x264_preset, keyframe_seconds) are checked by record_quality.validate and
+stored as numbers; they reach OBS the next time playcap starts it.
+
 The "links" pseudo-key belongs to the generic adapter: the pasted lines are
 written to queue.txt next to config.json and queue_source points at it.
 """
@@ -23,7 +27,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from playcap import adapters
+from playcap import adapters, record_quality
 
 CONFIG_NAME = "config.json"
 LINKS_FILE = "queue.txt"
@@ -142,6 +146,7 @@ def validate(partial, root):
             errors["adapter"] = "Unknown source."
     if "links" in partial and not _clean_links(partial["links"]):
         errors["links"] = "Add at least one page URL."
+    errors.update(record_quality.validate(partial))
     return errors
 
 
@@ -159,6 +164,9 @@ def save(root, partial):
     for key in TOOL_KEYS:
         if key in partial and not str(partial[key] or "").strip():
             partial.pop(key)                    # blank = keep auto-detection
+    for key in ("record_crf", "video_bitrate_kbps", "keyframe_seconds"):
+        if key in partial:
+            partial[key] = int(partial[key])
     merged = {**current, **partial}
     atomic_write_json(root / CONFIG_NAME, merged)
     return merged, {}

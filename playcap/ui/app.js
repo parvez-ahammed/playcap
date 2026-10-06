@@ -154,7 +154,7 @@ function renderControls() {
   $("rec-kill").hidden = !stoppingTooLong("record");
 
   let note = "";
-  if (opt) note = "Stop shrinking the library before recording — both at once drops frames.";
+  if (opt) note = "Stop re-compressing before recording — both at once drops frames.";
   else if (recJob.stopping) note = "Stopping… the current recording is being closed cleanly.";
   else if (recJob.stopping_after) note = "Will stop when the current item finishes.";
   else if (rec && external.record) note = "Recording was started outside this window.";
@@ -162,12 +162,12 @@ function renderControls() {
   $("rec-note").textContent = note;
 
   $("opt-start").disabled = rec || opt;
-  $("opt-start").textContent = opt ? "Shrinking…" : "Shrink library";
+  $("opt-start").textContent = opt ? "Re-compressing…" : "Re-compress library";
   $("opt-stop").hidden = !opt || optJob.stopping;
   $("opt-kill").hidden = !stoppingTooLong("optimize");
   $("opt-note").textContent = optJob.stopping ? "Stopping after ffmpeg exits — the file in progress is discarded, the original is untouched."
-    : (opt && external.optimize ? "Shrinking was started outside this window." :
-      "Re-encodes recordings to about a third of the size. Originals are kept until each new file is checked.");
+    : (opt && external.optimize ? "Re-compressing was started outside this window." :
+      "Optional. Only helps recordings made at a fixed bitrate (about 1.3x smaller); files recorded in a quality mode are skipped. Originals are kept until each new file is checked.");
 
   $("browser-start").disabled = !!(snap.health || {}).browser;
   $("browser-start").textContent = (snap.health || {}).browser ? "Browser open" : "Open browser";
@@ -220,6 +220,11 @@ function renderQueue() {
   $("queue-body").replaceChildren(...rows.map((i) => {
     const recordingThis = rec && nowId === i.id;
     const actions = [];
+    if (!rec && !isRunning("optimize") && (i.state === "waiting" || i.state === "failed")) {
+      actions.push(el("button", { class: "btn small", text: "Record",
+        title: "Record just this one, then stop",
+        onclick: () => job("start", "record", { item: i.id }) }));
+    }
     if (!rec) {
       if (i.state === "failed") actions.push(el("button", { class: "btn small", text: "Retry",
         onclick: () => act("/api/item/retry", { id: i.id }) }));
@@ -256,7 +261,7 @@ function renderLibrary() {
   )));
 }
 
-const LOG_NAMES = { record: "Recording", optimize: "Shrinking", queue: "Queue", browser: "Browser" };
+const LOG_NAMES = { record: "Recording", optimize: "Re-compressing", queue: "Queue", browser: "Browser" };
 function renderLogs() {
   if (!document.querySelector(".logs").open) return;
   const logs = snap.log || {};
@@ -287,7 +292,7 @@ $("rec-kill").onclick = () => {
 $("opt-start").onclick = () => job("start", "optimize");
 $("opt-stop").onclick = () => job("stop", "optimize", { mode: "now" });
 $("opt-kill").onclick = () => {
-  if (confirm("Force stop shrinking? The half-written file may be left behind; the original is untouched.")) {
+  if (confirm("Force stop re-compressing? The half-written file may be left behind; the original is untouched.")) {
     job("kill", "optimize");
   }
 };
@@ -313,7 +318,57 @@ async function openWizard(cancellable) {
   renderSources();
   $("output_dir").value = cfg.output_dir || (setup.root ? setup.root.replace(/[\\/]+$/, "") + (setup.root.includes("\\") ? "\\" : "/") + "recordings" : "");
   $("show").value = cfg.show || "My Recordings";
+  renderQuality();
   showStep(1);
+}
+
+// ---- recording quality (record_quality.py holds the rules) ----
+const QUALITY_CHOICES = [
+  ["small", "Small", "CRF 28 · slides, whiteboards, talking heads. Smallest files."],
+  ["balanced", "Balanced", "CRF 24 · good for most video. Recommended."],
+  ["high", "High", "CRF 20 · fast motion or fine detail. Bigger files."],
+  ["bitrate", "Fixed bitrate", "Same size every hour. Bigger; can be re-compressed later."],
+];
+let qualityChoice = "balanced";
+
+function renderQuality() {
+  const rec = setup.recording || {};
+  const v = rec.values || {};
+  qualityChoice = qualityChoice && setup._qualityTouched ? qualityChoice : (rec.preset || "balanced");
+  const choices = QUALITY_CHOICES.concat(rec.preset === "custom" ? [["custom", "Custom", "Your own values below."]] : []);
+  $("quality").replaceChildren(...choices.map(([key, label, help]) => {
+    const radio = el("input", { type: "radio", name: "quality", value: key, checked: key === qualityChoice });
+    radio.addEventListener("change", () => {
+      qualityChoice = key; setup._qualityTouched = true;
+      const p = (rec.presets || {})[key];
+      if (p) $("record_crf").value = p.record_crf;
+      renderQuality();
+    });
+    return el("label", { class: "source" + (key === qualityChoice ? " selected" : "") },
+      radio, el("strong", { text: label }), el("small", { class: "muted", text: " " + help }));
+  }));
+  if (!setup._qualityFilled) {
+    $("record_crf").value = v.record_crf ?? 24;
+    $("video_bitrate_kbps").value = v.video_bitrate_kbps ?? 2500;
+    $("keyframe_seconds").value = v.keyframe_seconds ?? 2;
+    $("x264_preset").replaceChildren(...(rec.x264_presets || ["veryfast"]).map((p) =>
+      el("option", { value: p, text: p, selected: p === (v.x264_preset || "veryfast") })));
+    setup._qualityFilled = true;
+  }
+  $("quality-obs").textContent = rec.obs_in_sync
+    ? "OBS is set to this already."
+    : "OBS picks this up the next time playcap starts it: close OBS, then press Launch OBS (step 1).";
+}
+
+function collectQuality() {
+  const out = {
+    record_mode: qualityChoice === "bitrate" ? "bitrate" : "quality",
+    record_crf: Number($("record_crf").value),
+    video_bitrate_kbps: Number($("video_bitrate_kbps").value),
+    x264_preset: $("x264_preset").value,
+    keyframe_seconds: Number($("keyframe_seconds").value),
+  };
+  return out;
 }
 
 function renderTools() {
@@ -393,10 +448,12 @@ function collect() {
   for (const f of a ? a.fields : []) out[f.key] = $("field-" + f.key).value;
   out.output_dir = $("output_dir").value.trim();
   out.show = $("show").value.trim();
+  Object.assign(out, collectQuality());
   return out;
 }
 
-const STEP_OF = { chrome_exe: 1, obs_exe: 1, ffmpeg: 1, ffprobe: 1, adapter: 2, output_dir: 3, show: 3 };
+const STEP_OF = { chrome_exe: 1, obs_exe: 1, ffmpeg: 1, ffprobe: 1, adapter: 2, output_dir: 3, show: 3,
+  record_mode: 3, record_crf: 3, video_bitrate_kbps: 3, x264_preset: 3, keyframe_seconds: 3 };
 
 async function finish() {
   document.querySelectorAll("[data-err]").forEach((e) => { e.textContent = ""; });

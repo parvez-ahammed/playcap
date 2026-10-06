@@ -60,6 +60,27 @@
         <input id="show" type="text">
         <small class="err" data-err="show"></small>
       </label>
+
+      <h3 class="qhead">Recording quality</h3>
+      <p class="muted small">How OBS compresses the video while it records. Quality modes keep the picture
+        the same everywhere and let the size follow it: a still slide costs almost nothing, motion costs more.
+        Those files are final. Fixed bitrate gives a predictable size per hour but wastes space on still
+        pictures; "Re-compress library" can shrink those later.</p>
+      <div id="quality" class="sources" role="radiogroup"></div>
+      <details class="adv">
+        <summary>Advanced</summary>
+        <div class="advgrid">
+          <label class="field"><span>Quality (CRF, 14-34) <small class="muted">lower = sharper and bigger</small></span>
+            <input id="record_crf" type="number" min="14" max="34"><small class="err" data-err="record_crf"></small></label>
+          <label class="field"><span>Bitrate (kbps) <small class="muted">fixed-bitrate mode only</small></span>
+            <input id="video_bitrate_kbps" type="number" min="500" max="50000"><small class="err" data-err="video_bitrate_kbps"></small></label>
+          <label class="field"><span>Encoder speed <small class="muted">slower = smaller file, more CPU</small></span>
+            <select id="x264_preset"></select><small class="err" data-err="x264_preset"></small></label>
+          <label class="field"><span>Keyframe every (s) <small class="muted">short = fast seeking</small></span>
+            <input id="keyframe_seconds" type="number" min="1" max="10"><small class="err" data-err="keyframe_seconds"></small></label>
+        </div>
+      </details>
+      <p id="quality-obs" class="muted small"></p>
     </div>
 
     <div class="wizard-nav">
@@ -88,11 +109,11 @@
       <div class="group">
         <h3>Library</h3>
         <div class="row wrap">
-          <button id="opt-start" class="btn big">Shrink library</button>
-          <button id="opt-stop" class="btn danger" hidden>Stop shrinking</button>
+          <button id="opt-start" class="btn big">Re-compress library</button>
+          <button id="opt-stop" class="btn danger" hidden>Stop re-compressing</button>
           <button id="opt-kill" class="btn danger" hidden>Force stop</button>
         </div>
-        <p id="opt-note" class="muted small">Re-encodes recordings to about a third of the size. Originals are kept until each new file is checked.</p>
+        <p id="opt-note" class="muted small">Optional. Only helps recordings made at a fixed bitrate (about 1.3x smaller); files recorded in a quality mode are skipped. Originals are kept until each new file is checked.</p>
       </div>
       <div class="group">
         <h3>Browser &amp; queue</h3>
@@ -113,7 +134,7 @@
     </div>
 
     <div id="encode" class="card now" hidden>
-      <div class="now-head"><span class="pulse alt"></span><h3>Shrinking library</h3></div>
+      <div class="now-head"><span class="pulse alt"></span><h3>Re-compressing library</h3></div>
       <div id="encode-meta" class="muted"></div>
     </div>
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-encode the recordings down to a sane bitrate, in place.
+"""Re-compress the library: re-encode recordings down to a sane bitrate, in place.
 
 OBS writes everything at a constant bitrate (8.16 Mbps in the original
 setup), which is ~4x more than a camera-on-a-whiteboard / camera-on-a-page
@@ -16,6 +16,12 @@ The original is only moved after the new file has been verified to run the
 full length, so a crashed encode can never lose the source. Keep that
 ordering.
 
+This step is optional. Recordings made in quality mode (record_quality,
+the default) are x264 CRF already; their encoder string says so (rc=crf), and
+any whose CRF is at or above --crf are skipped: a second lossy pass at the
+same quality saves nothing. It pays off for fixed-bitrate recordings, where a
+still slide burns as many bits as motion (1.3-1.4x smaller on lectures).
+
 A matching duration does not prove the encode is good: verify() compares
 container length and nothing else, and one episode passed it while carrying a
 malformed AAC frame two hours in. Archiving on a duration match is fine
@@ -30,6 +36,12 @@ them source and destination are the same path, so the encode goes to a
 sidecar file, is verified against the source, the source is archived, and
 only then does the sidecar take the episode's name. Files touched in the
 last FRESH_MINUTES are skipped -- that is a remux still being written.
+
+Only files inside a folder of the library count. The recorder always files
+an item under <show>/Season NN/, so a video lying loose in the library root
+was never filed: a raw OBS file left by a crash, a hard kill or a smoke test.
+A live run encoded one of those as the next "episode". They are listed and
+skipped; file or delete them by hand.
 
 Audio that is already AAC is stream-copied, not re-encoded: the old
 `-c:a aac -b:a 96k -ac 1` downmix emitted a malformed frame on one episode,
@@ -61,7 +73,7 @@ import sys
 import time
 from pathlib import Path
 
-from playcap import config, jobs
+from playcap import config, jobs, record_quality
 from playcap.settings import atomic_write_json
 
 # Filled in by _setup() from config.json, so importing needs no config.
@@ -114,12 +126,19 @@ def sources(state):
     _setup()
     done = finished(state)
     fresh = time.time() - FRESH_MINUTES * 60
-    live = [p for p in LIB.rglob("*.mkv") if "_partial" not in p.parts]
+    live = [p for p in LIB.rglob("*.mkv") if "_partial" not in p.parts
+            and p.parent != LIB]
     live += [p for p in LIB.rglob("*.mp4") if "_partial" not in p.parts
-             and p not in done and p.stat().st_mtime < fresh]
+             and p.parent != LIB and p not in done and p.stat().st_mtime < fresh]
     archived = ([p for ext in ("*.mkv", "*.mp4") for p in ARCHIVE.rglob(ext)]
                 if ARCHIVE.exists() else [])
     return sorted(live + archived, key=lambda p: p.name)
+
+
+def loose():
+    """Videos lying directly in the library root: never filed by the recorder."""
+    _setup()
+    return sorted(p for ext in ("*.mkv", "*.mp4") for p in LIB.glob(ext))
 
 
 def in_library(src):
@@ -247,6 +266,12 @@ def _run(argv=None):
     args = ap.parse_args(argv)
 
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    stray = loose()
+    if stray:
+        print(f"skipping {len(stray)} unfiled video(s) in {LIB} "
+              "(crash leftovers or tests; file or delete them by hand):")
+        for p in stray:
+            print(f"    {p.name}")
     todo = sources(state)
     if args.only:
         todo = [p for p in todo if args.only.lower() in p.name.lower()]
@@ -260,6 +285,13 @@ def _run(argv=None):
         dst = in_library(src)
         print(f"[{i}/{len(todo)}] {src.stem}")
         source_gb = gb(src)
+
+        rec_crf = record_quality.file_crf(src)
+        if rec_crf is not None and rec_crf >= args.crf - 0.5 and not args.verify:
+            # Recorded in quality mode already: encoding it again at the same
+            # CRF costs a lossy pass and gains nothing.
+            print(f"    recorded at CRF {rec_crf:g} already -- nothing to gain, skipped")
+            continue
 
         in_place = src == dst
         ok, why = (False, "raw recording") if in_place else verify(src, dst)

@@ -1,6 +1,8 @@
 """Record every queued item, one at a time, and survive being interrupted.
 
-Flow per item: navigate -> click the player (a CDP click is a trusted gesture,
+Flow per item: navigate -> aim OBS at the browser's monitor, pin the
+browser window on top, check OBS is not already black (playcap.screen) ->
+click the player (a CDP click is a trusted gesture,
 which is what starts DRM-protected and gesture-gated playback; a synthetic JS
 .click() does not) -> fullscreen the player element so the video renders at
 its native resolution instead of the page's player box -> OBS records the
@@ -28,8 +30,11 @@ the next run too; only "done" is permanent.
 Black frames: some DRM renders black to screen capture while looking fine on
 screen. The DOM cannot show that, so each poll also asks OBS for a tiny
 screenshot of the program output and records its mean brightness in
-.playcap/now.json; the UI flags a near-zero value. It is a warning, not a
-failure -- rehearse with playcap.tools.smoke_test before a batch.
+.playcap/now.json; the UI flags a near-zero value. A short dark stretch is
+only a warning (intros and fades exist), but BLACK_ABORT_SECONDS of unbroken
+black fails the item: a live run once captured a whole lecture as solid black
+(OBS pointed at no monitor) and would have filed it as done. The item stays
+queued. Rehearse with playcap.tools.smoke_test before a batch all the same.
 
 Live status and stopping (for the UI, see playcap.jobs): every poll writes
 .playcap/now.json (title, position, brightness). A stop-now flag is checked
@@ -39,6 +44,7 @@ checked between items. CTRL_BREAK is mapped to KeyboardInterrupt too.
 """
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -46,7 +52,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from playcap import cdp, config, jobs, obs_setup, organize
+from playcap import cdp, config, jobs, obs_setup, organize, record_quality, screen
 from playcap.settings import atomic_write_json
 from playcap.adapters.base import VIDEO_STATE_JS, ItemFailed  # noqa: F401
 from playcap.obs_client import Obs, ObsError
@@ -62,6 +68,10 @@ COOLDOWN_AFTER = 3         # consecutive failed items that trigger a long wait
 COOLDOWN_SECONDS = 600
 MIN_FREE_GB = 10
 PLAYER_WAIT_SECONDS = 45   # how long to wait for the player to appear
+READY_WAIT_SECONDS = 20    # how long to let the player buffer before the first click
+PREFLIGHT_SECONDS = 8      # how long the capture may stay black before recording starts
+BLACK_LUMA = 8.0           # mean program brightness (0-255) below this is "black"
+BLACK_ABORT_SECONDS = 90   # unbroken black this long fails the item
 
 EXIT_FULLSCREEN_JS = ("(async()=>{if(document.fullscreenElement)"
                       " await document.exitFullscreen(); return true;})()")
@@ -105,6 +115,25 @@ def stop_after_current():
     return jobs.consume(Path.cwd(), "record", "after_current")
 
 
+class BlackWatch:
+    """Times unbroken black. update() -> seconds black so far (0 = not black).
+    An unreadable brightness (None) neither starts nor breaks a black run."""
+
+    def __init__(self, threshold=BLACK_LUMA):
+        self.threshold = threshold
+        self.since = None
+
+    def update(self, luma, now):
+        if luma is None:
+            return now - self.since if self.since is not None else 0.0
+        if luma >= self.threshold:
+            self.since = None
+            return 0.0
+        if self.since is None:
+            self.since = now
+        return now - self.since
+
+
 def program_luma(obs):
     try:
         return obs.screenshot_luma(obs.current_scene())
@@ -128,8 +157,11 @@ def state(player):
 
 
 def apply_output_settings(obs):
-    """Recording bitrate + GOP. A 2 s keyframe interval keeps seeking cheap;
-    OBS defaults to 250 frames, which makes every seek re-buffer ~8 s."""
+    """Recording bitrate + GOP for OBS's *simple* output mode. A 2 s keyframe
+    interval keeps seeking cheap; OBS defaults to 250 frames, which makes every
+    seek re-buffer ~8 s. Once record_quality has switched OBS to advanced
+    mode these values are ignored by OBS (recordEncoder.json rules), so this
+    only covers an OBS that has not been relaunched by playcap yet."""
     obs.request("SetProfileParameter", {
         "parameterCategory": "SimpleOutput", "parameterName": "VBitrate",
         "parameterValue": str(CFG.get("video_bitrate_kbps", 2500))})
@@ -209,6 +241,19 @@ def ensure_chrome():
     return False
 
 
+def report_quality():
+    """Say how this run will be encoded, and whether OBS actually uses it."""
+    print(f"recording quality: {record_quality.describe(CFG)}")
+    try:
+        ok = record_quality.in_sync(CFG, os.environ, sys.platform)
+    except Exception:
+        ok = False
+    if not ok:
+        print("  !! OBS is not set to this yet -- it still records with its old settings "
+              f"({CFG.get('video_bitrate_kbps')} kbps fixed). Close OBS and press "
+              "Launch OBS in the UI to apply it.")
+
+
 def connect_obs(relaunch=True):
     """Reconnect to OBS, starting it first if it is not running.
 
@@ -229,6 +274,15 @@ def connect_obs(relaunch=True):
     # Newer OBS ignores that flag and prompts anyway while crash markers are
     # left over; clear them first (only acts while OBS is closed).
     obs_setup.clear_crash_markers()
+    # OBS reads its recording encoder only at start: apply the chosen quality
+    # while it is still closed.
+    if not obs_setup.is_obs_running():
+        try:
+            changed, msg = record_quality.apply(CFG, os.environ, sys.platform, obs_running=False)
+            if changed:
+                print(f"    {msg}")
+        except Exception as exc:
+            print(f"    could not apply recording quality: {exc}")
     subprocess.Popen([str(exe), "--disable-shutdown-check", "--multi"],
                      cwd=str(exe.parent),
                      creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
@@ -278,8 +332,40 @@ def gesture(sess, expr, timeout=25):
     return res.get("result", {}).get("value")
 
 
+def wait_playable(player, seconds=READY_WAIT_SECONDS):
+    """Wait until the <video> has data to play (readyState >= 3). A click on a
+    player that is still loading was ignored twice in four live starts and
+    burned a 90 s retry each time. Returns the last state seen; never fails --
+    some players only load after the first click."""
+    st = {}
+    for _ in range(int(seconds * 2)):
+        try:
+            st = state(player)
+        except Exception:
+            st = {}
+        if st.get("found") and st.get("readyState", 0) >= 3:
+            break
+        time.sleep(0.5)
+    return st
+
+
+def preflight(obs, seconds=PREFLIGHT_SECONDS):
+    """Refuse to record a capture that is already black before playback goes
+    fullscreen (the page itself is on screen then, so black means OBS sees the
+    wrong monitor or nothing). -> last brightness, or None if OBS cannot say."""
+    luma = None
+    for _ in range(int(seconds)):
+        luma = program_luma(obs)
+        if luma is None or luma >= BLACK_LUMA:
+            return luma
+        time.sleep(1)
+    raise ItemFailed(f"OBS output is black before recording (brightness {luma:.1f}); "
+                     "check the capture source in OBS")
+
+
 def start_playback(sess, player, rect):
     """Click the player centre until currentTime actually advances."""
+    wait_playable(player)
     for attempt in range(3):
         sess.click(rect["x"] + rect["w"] / 2, rect["y"] + rect["h"] / 2)
         time.sleep(4)
@@ -300,6 +386,7 @@ def record_one(item, index, obs, speed, args):
 
     sess = cdp.Session(ADAPTER.page_target(CFG, item))
     player = None
+    pin = screen.Pin(sess)
     try:
         sess.bring_to_front()
         sess.navigate(item.url, settle=4)
@@ -323,6 +410,15 @@ def record_one(item, index, obs, speed, args):
         if not player:
             raise ItemFailed("cannot attach to the player")
         v = player.video
+
+        # Make sure OBS is looking at this browser before anything is played.
+        moved = screen.aim_capture(obs, screen.window_bounds(sess))
+        if moved:
+            print(f"    {moved}")
+        pin.__enter__()
+        if pin.note:
+            print(f"    {pin.note}")
+        preflight(obs)
 
         st = start_playback(sess, player, rect)
         duration = st["duration"]
@@ -365,6 +461,7 @@ def record_one(item, index, obs, speed, args):
         last_t, last_move = st["t"], time.time()
 
         reattaches = stall_fixes = 0
+        black = BlackWatch()
         while True:
             nap(POLL_SECONDS)
             try:
@@ -425,7 +522,11 @@ def record_one(item, index, obs, speed, args):
             mins = (time.time() - t_started) / 60
             print(f"    t={s['t']:.0f}/{duration:.0f}s  ({mins:.1f} min elapsed)",
                   flush=True)
-            write_now(item, s, duration, program_luma(obs), t_started)
+            luma = program_luma(obs)
+            write_now(item, s, duration, luma, t_started)
+            if black.update(luma, time.time()) > BLACK_ABORT_SECONDS:
+                raise ItemFailed(f"capture has been black for over {BLACK_ABORT_SECONDS}s "
+                                 "(OBS capturing the wrong/no monitor, or DRM)")
 
         path = obs.stop_record()
         time.sleep(2)
@@ -460,6 +561,7 @@ def record_one(item, index, obs, speed, args):
                 sess.key("Escape", code="Escape", vk=27)
             except Exception:
                 pass
+        pin.__exit__(None, None, None)
         if player and player.session is not sess:
             player.session.close()
         sess.close()
@@ -524,6 +626,8 @@ def main(argv=None):
     ap.add_argument("--grace-hours", type=float, default=2.0,
                     help="wait this long after an item airs before recording it")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--id", action="append", default=[],
+                    help="record only this item (repeatable); the UI's per-item Record button")
     args = ap.parse_args(argv)
 
     jobs.graceful_signals()
@@ -552,6 +656,9 @@ def main(argv=None):
             future += 1          # not published yet -- leave it for a later run
             continue
         todo.append((pos, it))
+    if args.id:
+        wanted = {str(i) for i in args.id}
+        todo = [(pos, it) for pos, it in todo if str(it.id) in wanted]
     if args.limit:
         todo = todo[:args.limit]
 
@@ -576,6 +683,7 @@ def main(argv=None):
     outdir().mkdir(parents=True, exist_ok=True)
     obs = wait_ready(connect_obs())
     apply_output_settings(obs)
+    report_quality()
 
     consecutive = 0
     try:

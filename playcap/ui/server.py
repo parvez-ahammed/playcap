@@ -19,22 +19,26 @@ underneath it would be silently lost.
 """
 import argparse
 import json
+import os
 import secrets
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from playcap import detect, jobs, obs_setup, settings, state
+from playcap import detect, jobs, obs_setup, record_quality, settings, state
 
 HERE = Path(__file__).resolve().parent
 STATIC = {"app.js": "application/javascript; charset=utf-8",
           "style.css": "text/css; charset=utf-8"}
 MAX_BODY = 1 << 20
 DEFAULT_PORT = 8765
+OBS_SETUP_TRIES = 8          # x OBS_SETUP_WAIT: how long Set up OBS waits for a booting OBS
+OBS_SETUP_WAIT = 2.0
 
 BROWSE_JS = r"""
 import sys, tkinter
@@ -127,8 +131,23 @@ def setup_info(root):
         "adapters": settings.adapters_available(),
         "links": settings.read_links(root, cfg),
         "root": str(Path(root).resolve()),
+        "recording": recording_info(cfg),
     }
     return info
+
+
+def recording_info(cfg):
+    """The chosen recording quality and whether OBS is already set to it."""
+    try:
+        in_sync = record_quality.in_sync(cfg, os.environ, sys.platform)
+    except Exception:
+        in_sync = False
+    return {"preset": record_quality.preset_name(cfg),
+            "values": record_quality.effective(cfg),
+            "describe": record_quality.describe(cfg),
+            "presets": record_quality.PRESETS,
+            "x264_presets": list(record_quality.X264_PRESETS),
+            "obs_in_sync": in_sync}
 
 
 def obs_action(root, action):
@@ -143,24 +162,55 @@ def obs_action(root, action):
         enabled_now = False
         if not ws or not ws["enabled"]:
             enabled_now = obs_setup.enable_websocket()
+        # OBS reads its recording encoder only at start, so apply the chosen
+        # quality now, while it is still closed (see record_quality).
+        try:
+            quality_now, _ = record_quality.apply(cfg, os.environ, sys.platform, obs_running=False)
+        except Exception:
+            quality_now = False
         obs_setup.launch_obs(exe)
-        return True, ("Starting OBS (websocket switched on)." if enabled_now
-                      else "Starting OBS.")
+        done = [m for m, on in (("websocket switched on", enabled_now),
+                                ("recording quality applied", quality_now)) if on]
+        return True, "Starting OBS" + (f" ({', '.join(done)})." if done else ".")
     if action == "setup":
         from playcap.obs_client import Obs, ObsError
         url, password = detect.obs_settings(cfg)
-        try:
-            obs = Obs(password, url=url, timeout=5)
-        except ObsError as exc:
+        # Right after Launch OBS the websocket refuses connections, then
+        # accepts them before OBS can answer scene requests (a live click
+        # got an HTTP 500 here). Keep trying for a while instead.
+        obs, last = None, None
+        for _ in range(OBS_SETUP_TRIES):
+            try:
+                obs = Obs(password, url=url, timeout=5)
+                break
+            except ObsError as exc:
+                last = exc
+            except Exception as exc:
+                last = exc
+            if not obs_setup.is_obs_running():
+                break
+            time.sleep(OBS_SETUP_WAIT)
+        if obs is None:
             ws = detect.obs_websocket()
             if ws and not ws["enabled"]:
                 return False, ("OBS's websocket server is off. Close OBS and press "
                                "Launch OBS -- playcap switches it on.")
-            return False, f"Cannot reach OBS: {str(exc).splitlines()[0]}"
-        except Exception:
-            return False, "OBS is not running. Press Launch OBS first."
+            if not obs_setup.is_obs_running():
+                return False, "OBS is not running. Press Launch OBS first."
+            return False, (f"OBS is still starting ({str(last).splitlines()[0]}). "
+                           "Try again in a few seconds.")
         try:
-            actions = obs_setup.ensure(obs)
+            actions = None
+            for _ in range(OBS_SETUP_TRIES):
+                try:
+                    actions = obs_setup.ensure(obs)
+                    break
+                except ObsError as exc:
+                    last = exc
+                    time.sleep(OBS_SETUP_WAIT)
+            if actions is None:
+                return False, (f"OBS is not ready yet ({str(last).splitlines()[0]}). "
+                               "Try again in a few seconds.")
         finally:
             obs.close()
         return True, ("OBS was already set up." if not actions
@@ -168,7 +218,7 @@ def obs_action(root, action):
     return False, "Unknown OBS action."
 
 
-def job_action(root, action, name, mode="now"):
+def job_action(root, action, name, mode="now", item=None):
     if name not in jobs.NAMES:
         return False, "Unknown job."
     if action == "start":
@@ -179,6 +229,14 @@ def job_action(root, action, name, mode="now"):
             cfg, _ = state._effective(raw)
         except Exception as exc:
             return False, f"The selected source cannot be loaded: {exc}"
+        if item:
+            # One item only (the queue row's Record button). Validated against
+            # the queue so nothing but a known id ever reaches the command line.
+            if name != "record":
+                return False, "Only recording can target one item."
+            if str(item) not in _queue_ids(root):
+                return False, "No such item in the queue."
+            return jobs.start(name, root, cfg, args=["--id", str(item)])
         return jobs.start(name, root, cfg)
     if action == "stop":
         return True, jobs.stop(name, root, mode=mode)
@@ -320,7 +378,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": ok, "message": msg})
             if path.startswith("/api/job/"):
                 ok, msg = job_action(self.root, path.rsplit("/", 1)[1],
-                                     str(body.get("job", "")), str(body.get("mode", "now")))
+                                     str(body.get("job", "")), str(body.get("mode", "now")),
+                                     body.get("item"))
                 return self._send(200, {"ok": ok, "message": msg})
             if path.startswith("/api/item/"):
                 ok, msg = edit_item(self.root, path.rsplit("/", 1)[1], str(body.get("id", "")))

@@ -13,12 +13,21 @@ them at the start of every run (recorder.apply_output_settings).
 
 The capture kind differs per platform; the first one this OBS offers wins.
 
+A Windows monitor_capture created with empty settings gets monitor_id
+"DUMMY" and records solid black -- found when a live run captured 39 minutes
+of nothing. So our own capture input is always pointed at a real monitor:
+the one matching OBS's canvas size (the fullscreened player fills it at native
+resolution), primary first among those, else the primary, else the first
+listed. Only our own input is repaired; a hand-picked monitor is kept as long
+as OBS still lists it.
+
 enable_websocket() switches OBS's websocket server on by editing OBS's own
 config file -- only while OBS is closed, because OBS rewrites that file on
 exit. launch_obs() starts OBS the way the recorder's relaunch does.
 """
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -42,6 +51,51 @@ def capture_kind(kinds):
         if k in kinds:
             return k
     return None
+
+
+# Capture kinds whose default settings select no monitor -> property naming it.
+MONITOR_PROP = {"monitor_capture": "monitor_id"}
+_SIZE = re.compile(r"(\d+)x(\d+)")
+
+
+def pick_monitor(items, width, height):
+    """Choose from OBS list-property items ({itemName, itemValue, ...}).
+
+    Names look like 'MSI G241V: 1920x1080 @ -1920,8 (Primary Monitor)'."""
+    items = [i for i in items if i.get("itemEnabled", True) and i.get("itemValue")]
+    if not items:
+        return None
+
+    def size(i):
+        m = _SIZE.search(i.get("itemName", ""))
+        return (int(m.group(1)), int(m.group(2))) if m else None
+
+    def primary(i):
+        return "primary" in i.get("itemName", "").lower()
+
+    fits = [i for i in items if size(i) == (width, height)]
+    pool = fits or items
+    return next((i for i in pool if primary(i)), pool[0])
+
+
+def _point_at_monitor(obs, name, kind):
+    """Give our capture input a real monitor if it has none. -> action or None."""
+    prop = MONITOR_PROP.get(kind)
+    if not prop:
+        return None
+    current = obs.request("GetInputSettings", {"inputName": name}) \
+                 .get("inputSettings", {}).get(prop)
+    items = obs.request("GetInputPropertiesListPropertyItems",
+                        {"inputName": name, "propertyName": prop}).get("propertyItems", [])
+    if current and current != "DUMMY" and any(i.get("itemValue") == current for i in items):
+        return None
+    video = obs.request("GetVideoSettings")
+    choice = pick_monitor(items, video.get("baseWidth"), video.get("baseHeight"))
+    if not choice:
+        return None
+    obs.request("SetInputSettings", {"inputName": name,
+                                     "inputSettings": {prop: choice["itemValue"]}})
+    return f"pointed '{name}' at {choice.get('itemName', 'a monitor')}"
 
 
 def ensure(obs, scene=SCENE):
@@ -70,6 +124,13 @@ def ensure(obs, scene=SCENE):
                                         "inputKind": kind, "inputSettings": {},
                                         "sceneItemEnabled": True})
             actions.append(f"added a screen capture ({kind})")
+
+    own = {i["inputName"]: i.get("inputKind")
+           for i in obs.request("GetInputList").get("inputs", [])}
+    if CAPTURE_NAME in own:
+        fixed = _point_at_monitor(obs, CAPTURE_NAME, own[CAPTURE_NAME])
+        if fixed:
+            actions.append(fixed)
 
     if listing.get("currentProgramSceneName") != scene:
         obs.request("SetCurrentProgramScene", {"sceneName": scene})

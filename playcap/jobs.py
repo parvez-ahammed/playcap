@@ -1,6 +1,6 @@
 """Start, watch and stop the pipeline's long-running jobs.
 
-    start(name, root, cfg)          browser | queue | record | optimize
+    start(name, root, cfg, args=())  browser | queue | record | optimize (+ extra CLI args)
     stop(name, root, mode)          "now" or "after_current" (record only)
     kill(name, root)                last resort: force-terminate the process tree
     status(root)                    {name: {running, pid, started}}
@@ -75,12 +75,20 @@ def requested(root, name, kind):
 
 
 def consume(root, name, kind):
+    """Delete a flag; True if it was there. On Windows a reader (an indexer,
+    antivirus) can hold the file for a moment, and the recorder once crashed on
+    exit with WinError 32 here -- so retry briefly, then leave it: a stale flag
+    is cleared again by the next start()."""
     f = _flag(root, name, kind)
-    try:
-        f.unlink()
-        return True
-    except FileNotFoundError:
-        return False
+    for attempt in range(10):
+        try:
+            f.unlink()
+            return True
+        except FileNotFoundError:
+            return False
+        except PermissionError:
+            time.sleep(0.2)
+    return f.exists()
 
 
 def clear_flags(root, name):
@@ -164,7 +172,7 @@ def command(name, cfg):
     return [sys.executable, "-u", "-m", MODULES[name]]
 
 
-def start(name, root, cfg, cmd=None):
+def start(name, root, cfg, cmd=None, args=()):
     if name not in NAMES:
         return False, f"unknown job {name!r}"
     st = status(root)
@@ -191,7 +199,7 @@ def start(name, root, cfg, cmd=None):
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8",
            "PYTHONPATH": path}
     try:
-        proc = subprocess.Popen(cmd or command(name, cfg), cwd=str(root), stdout=out,
+        proc = subprocess.Popen((cmd or command(name, cfg)) + list(args), cwd=str(root), stdout=out,
                                 stderr=err, stdin=subprocess.DEVNULL,
                                 creationflags=flags, env=env,
                                 start_new_session=not sys.platform.startswith("win"))

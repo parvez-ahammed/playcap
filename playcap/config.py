@@ -25,7 +25,7 @@ import json
 import sys
 from pathlib import Path
 
-from playcap import adapters, detect
+from playcap import adapters, detect, record_quality
 
 CONFIG_FILE = Path("config.json")
 GENERIC_ADAPTER = "playcap.adapters.html5_video"
@@ -51,6 +51,8 @@ DEFAULTS = {
     "show_plot": "",
     "show_premiered": "",
     "avg_item_minutes": 120,          # only for the rough hours estimate
+    # how OBS encodes the recording (record_quality.py explains each key)
+    **record_quality.DEFAULTS,
 }
 
 _cache = {}

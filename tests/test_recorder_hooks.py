@@ -74,3 +74,35 @@ def test_stop_after_current_consumed_once(tmp_path, monkeypatch):
     jobs.request(tmp_path, "record", "after_current")
     assert recorder.stop_after_current() is True
     assert recorder.stop_after_current() is False
+
+
+def test_black_watch_times_only_unbroken_black():
+    w = recorder.BlackWatch(threshold=8)
+    assert w.update(120, 0) == 0
+    assert w.update(2.9, 10) == 0            # black starts here
+    assert w.update(0.0, 40) == 30
+    assert w.update(None, 50) == 40          # unreadable: run continues
+    assert w.update(90, 60) == 0             # real picture resets it
+    assert w.update(None, 70) == 0           # unreadable does not start a run
+    assert w.update(1, 80) == 0
+    assert w.update(1, 200) == 120
+
+
+def test_preflight_passes_on_picture_and_fails_on_black(monkeypatch):
+    monkeypatch.setattr(recorder.time, "sleep", lambda s: None)
+    seq = iter([0.0, 2.0, 120.0])
+    monkeypatch.setattr(recorder, "program_luma", lambda obs: next(seq))
+    assert recorder.preflight(None, seconds=5) == 120.0
+    monkeypatch.setattr(recorder, "program_luma", lambda obs: 0.0)
+    with pytest.raises(recorder.ItemFailed, match="black before recording"):
+        recorder.preflight(None, seconds=3)
+    monkeypatch.setattr(recorder, "program_luma", lambda obs: None)   # OBS cannot say
+    assert recorder.preflight(None, seconds=3) is None
+
+
+def test_wait_playable_stops_at_ready_state_3(monkeypatch):
+    monkeypatch.setattr(recorder.time, "sleep", lambda s: None)
+    states = iter([{"found": True, "readyState": 1}, {"found": True, "readyState": 2},
+                   {"found": True, "readyState": 4}, {"found": True, "readyState": 0}])
+    monkeypatch.setattr(recorder, "state", lambda p: next(states))
+    assert recorder.wait_playable(None, seconds=5)["readyState"] == 4

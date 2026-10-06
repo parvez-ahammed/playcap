@@ -202,3 +202,66 @@ def test_setup_shows_adapter_defaults_not_placeholders(ui):
     from playcap import config
     assert info["config"]["show"] == config.DEFAULTS["show"]
     assert info["config"]["queue_source"] == "queue.txt"     # adapter default
+
+
+def test_record_single_item_passes_validated_id(ui, monkeypatch):
+    root, port = ui
+    configured_with_queue(root)
+    tok = token_of(port)
+    seen = {}
+    monkeypatch.setattr(server.jobs, "start",
+                        lambda name, root, cfg, cmd=None, args=(): seen.update(name=name, args=list(args)) or (True, "started"))
+    status, res = call(port, "POST", "/api/job/start", {"job": "record", "item": "a"}, token=tok)
+    assert res["ok"] and seen == {"name": "record", "args": ["--id", "a"]}
+    status, res = call(port, "POST", "/api/job/start", {"job": "record", "item": "a; rm -rf /"}, token=tok)
+    assert res["ok"] is False
+    status, res = call(port, "POST", "/api/job/start", {"job": "optimize", "item": "a"}, token=tok)
+    assert res["ok"] is False
+
+
+def test_obs_setup_waits_for_booting_obs(tmp_path, monkeypatch):
+    from playcap.obs_client import ObsError
+    from playcap.ui import server
+    monkeypatch.setattr(server.time, "sleep", lambda s: None)
+    monkeypatch.setattr(server.obs_setup, "is_obs_running", lambda: True)
+    monkeypatch.setattr(server.detect, "obs_settings", lambda cfg: ("ws://x", "pw"))
+    tries = {"connect": 0, "ensure": 0}
+
+    class Booting:
+        def __init__(self, *a, **kw):
+            tries["connect"] += 1
+            if tries["connect"] < 3:
+                raise ObsError("refused")
+
+        def close(self):
+            pass
+
+    def ensure(obs):
+        tries["ensure"] += 1
+        if tries["ensure"] < 2:
+            raise ObsError("not ready")
+        return ["created scene 'playcap'"]
+
+    import playcap.obs_client as oc
+    monkeypatch.setattr(oc, "Obs", Booting)
+    monkeypatch.setattr(server.obs_setup, "ensure", ensure)
+    ok, msg = server.obs_action(tmp_path, "setup")
+    assert ok and "created scene" in msg
+    assert tries == {"connect": 3, "ensure": 2}
+
+
+def test_obs_setup_gives_up_with_a_message_not_a_500(tmp_path, monkeypatch):
+    from playcap.obs_client import ObsError
+    from playcap.ui import server
+    monkeypatch.setattr(server.time, "sleep", lambda s: None)
+    monkeypatch.setattr(server.obs_setup, "is_obs_running", lambda: True)
+    monkeypatch.setattr(server.detect, "obs_settings", lambda cfg: ("ws://x", "pw"))
+    monkeypatch.setattr(server.detect, "obs_websocket", lambda: {"enabled": True})
+
+    def refuse(*a, **kw):
+        raise ObsError("refused")
+
+    import playcap.obs_client as oc
+    monkeypatch.setattr(oc, "Obs", refuse)
+    ok, msg = server.obs_action(tmp_path, "setup")
+    assert not ok and "still starting" in msg

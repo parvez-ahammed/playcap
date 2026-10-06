@@ -135,3 +135,10 @@ table.list { width: 100%; border-collapse: collapse; }
   .tool .btn { grid-column: 3; }
   .topbar { flex-wrap: wrap; }
 }
+
+/* recording quality (wizard step 3) */
+.qhead { margin-top: 22px; }
+.adv { margin: 10px 0 4px; }
+.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.advgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 16px; margin-top: 10px; }
+.advgrid select, .advgrid input { width: 100%; }

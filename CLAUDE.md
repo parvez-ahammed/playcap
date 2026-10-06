@@ -26,6 +26,8 @@ playcap/                 generic core. No site names anywhere in it.
   jobs.py                start/stop jobs: PID files, stop flags in .playcap/, CTRL_BREAK, kill
   state.py               one snapshot for the UI (items, library, health, problems)
   obs_setup.py           idempotent OBS scene/capture setup; enables OBS websocket while OBS is closed
+  record_quality.py      recording encoder (CRF/CBR) presets; written into OBS's profile while OBS is closed
+  screen.py              aims OBS at the browser's monitor, pins the browser window on top (Windows)
   control.py             old entry point, now opens the UI
   tools/                 smoke_test, inspect_live, probe (generic diagnostics)
 record_all.py build_queue.py optimize.py organize.py status.py control.py

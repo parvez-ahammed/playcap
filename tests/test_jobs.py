@@ -163,3 +163,29 @@ def test_job_can_import_playcap_from_any_folder(tmp_path):
         sys.executable, "-c", "import playcap, sys; print('imported', playcap.__name__)"])
     assert ok
     assert wait_until(lambda: "imported playcap" in jobs.tail(tmp_path, "queue"))
+
+
+def test_start_appends_args(tmp_path):
+    ok, _ = jobs.start("queue", tmp_path, {}, cmd=[sys.executable, "-c",
+                       "import sys; print('ARGS', sys.argv[1:])"], args=["--id", "42"])
+    assert ok
+    assert wait_until(lambda: "ARGS ['--id', '42']" in jobs.tail(tmp_path, "queue"))
+
+
+def test_consume_survives_a_locked_flag(tmp_path, monkeypatch):
+    # WinError 32: another process holds the flag file for a moment.
+    jobs.request(tmp_path, "record", "now")
+    real_unlink = type(tmp_path).unlink
+    calls = []
+
+    def flaky(self, *a, **kw):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError(32, "in use")
+        return real_unlink(self, *a, **kw)
+
+    monkeypatch.setattr(type(tmp_path), "unlink", flaky)
+    monkeypatch.setattr(jobs.time, "sleep", lambda s: None)
+    assert jobs.consume(tmp_path, "record", "now") is True
+    assert not jobs.requested(tmp_path, "record", "now")
+    jobs.clear_flags(tmp_path, "record")      # must not raise either

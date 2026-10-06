@@ -7,6 +7,11 @@ a verified, compressed media library that Jellyfin or Emby can read.
 
 License: GPL-3.0-or-later.
 
+[![playcap in 60 seconds](docs/media/playcap-overview.png)](docs/media/playcap-overview.mp4)
+
+*playcap in 60 seconds* ([MP4, 3.5 MB](docs/media/playcap-overview.mp4)). Made from code with
+example data only: no real site, account or recording appears in it.
+
 ## Why
 
 Scheduled screen recorders start and stop by the clock and know nothing about
@@ -21,15 +26,20 @@ playcap is built for long, unattended runs:
 - **Resumable.** Progress is saved after every item. A crash or Ctrl+C costs
   at most the item in flight, and a rerun skips finished work. Partial
   recordings are discarded, never mistaken for the real thing.
-- **Verified re-encode.** `optimize` re-encodes to CRF 24 and only archives
-  the original once the new file runs the full length. AAC audio is copied,
-  not re-encoded.
+- **Recorded at the size you choose.** OBS records in constant-quality mode
+  (x264 CRF) by default, so a still slide costs almost nothing and the file is
+  final. Pick Small, Balanced, High or a fixed bitrate in the UI; playcap
+  writes it into OBS's profile while OBS is closed.
+- **Optional verified re-compress.** For fixed-bitrate recordings, `optimize`
+  re-encodes to CRF 24 and only archives the original once the new file runs
+  the full length. Files already recorded at that quality are skipped. AAC
+  audio is copied, not re-encoded.
 - **Jellyfin/Emby filing.** Episodes are named `SxxEyy - Title` with `.nfo`
   sidecars for the untruncated title, air date and description.
 - **Simple local UI.** A setup wizard that finds Chrome, OBS and ffmpeg for
   you and configures OBS itself, then one screen to start/stop recording,
   watch progress (including a black-capture warning), retry or skip items and
-  shrink the library. Runs on `127.0.0.1`, protected against cross-site requests.
+  re-compress the library. Runs on `127.0.0.1`, protected against cross-site requests.
 
 ## Requirements
 
@@ -59,7 +69,8 @@ asks for:
 Then: *Open browser* (log in to your site in that window once -- playcap never
 handles passwords), *Refresh queue*, *Start recording*. *Stop after this one*
 finishes the item in flight; *Stop now* discards it and keeps it queued.
-*Shrink library* re-encodes finished recordings. Settings live in `config.json`
+*Re-compress library* (optional) re-encodes fixed-bitrate recordings; the
+recording quality itself is chosen in the wizard's Library step. Settings live in `config.json`
 in the folder you started the UI from; you never have to edit it.
 
 Jobs keep running if you close the UI; reopening it picks them up again.
