@@ -81,3 +81,17 @@ def test_no_capture_kind_reports_problem():
     obs = FakeObs(kinds=["browser_source"], scenes=["Scene"])
     actions = obs_setup.ensure(obs)
     assert any("no screen capture" in a.lower() for a in actions)
+
+
+def test_clear_crash_markers_only_when_closed(tmp_path, monkeypatch):
+    env = {"APPDATA": str(tmp_path)}
+    sent = tmp_path / "obs-studio" / ".sentinel"
+    sent.mkdir(parents=True)
+    for n in ("run_a", "run_b"):
+        (sent / n).write_text("")
+    (sent / "keep.txt").write_text("")
+    monkeypatch.setattr(obs_setup, "is_obs_running", lambda: True)
+    assert obs_setup.clear_crash_markers(env=env, platform="win32") == 0
+    monkeypatch.setattr(obs_setup, "is_obs_running", lambda: False)
+    assert obs_setup.clear_crash_markers(env=env, platform="win32") == 2
+    assert [p.name for p in sent.iterdir()] == ["keep.txt"]

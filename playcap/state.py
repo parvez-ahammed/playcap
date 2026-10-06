@@ -16,8 +16,9 @@ process scan takes ~1 s), so the UI server runs them in a background thread
 Every file read degrades to "empty" when the file is missing, half-written or
 corrupt -- a status page must never be the thing that crashes.
 
-Item states mirror the recorder's own rules: done / skipped / failed come from
-the progress file; otherwise locked, then "not aired" for anything dated later
+Item states mirror the recorder's own rules: done / skipped come from the
+progress file; then locked (even if an earlier run failed it -- the recorder
+never attempts a locked item); then failed; then "not aired" for anything dated later
 than now minus the recorder's default 2 h grace, else waiting.
 """
 import json
@@ -122,10 +123,14 @@ def _items(root, cfg, adapter):
             continue
         p = progress.get(str(it.id), {}) if isinstance(progress.get(str(it.id)), dict) else {}
         st = p.get("status")
-        if st in ("done", "skipped", "failed"):
+        # Same precedence as the recorder: a locked item is never attempted,
+        # even if an earlier run marked it failed.
+        if st in ("done", "skipped"):
             chip = st
         elif it.locked:
             chip = "locked"
+        elif st == "failed":
+            chip = "failed"
         elif it.aired_at and it.aired_at > cutoff:
             chip = "not_aired"
         else:

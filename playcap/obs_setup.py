@@ -125,10 +125,37 @@ def enable_websocket(env=None, platform=None, obs_running=None):
     return True
 
 
+def clear_crash_markers(env=None, platform=None):
+    """Remove OBS's leftover "unclean shutdown" markers, only while OBS is closed.
+
+    OBS 30+ writes .sentinel/run_<uuid> when it starts and deletes it on a clean
+    exit. A crash or a killed process leaves it behind, and the next start then
+    stops at a "launch in safe mode?" dialog -- --disable-shutdown-check does not
+    skip it on current versions -- so the websocket never comes up and an
+    unattended run waits forever. Deleting the markers of runs that are no
+    longer running is exactly what a clean exit would have done.
+    Returns how many were removed."""
+    env = os.environ if env is None else env
+    platform = platform or sys.platform
+    if is_obs_running():
+        return 0
+    base = detect.obs_config_file(env, platform).parents[2]      # .../obs-studio
+    removed = 0
+    for marker in (base / ".sentinel").glob("run_*"):
+        try:
+            marker.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def launch_obs(exe):
     """Start OBS detached, from its own folder (it finds its data relative to
-    the working directory), skipping the crash-recovery prompt that would
-    otherwise block the websocket server from starting."""
+    the working directory). Stale crash markers are cleared first and
+    --disable-shutdown-check is passed for older versions, so no
+    crash-recovery prompt blocks the websocket server from starting."""
+    clear_crash_markers()
     exe = Path(exe)
     subprocess.Popen([str(exe), "--disable-shutdown-check"], cwd=str(exe.parent),
                      creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))

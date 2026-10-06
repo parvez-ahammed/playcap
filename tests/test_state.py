@@ -131,3 +131,10 @@ def test_friendly_errors():
     assert state.friendly_error(raw) == "The playcap browser was closed."
     assert state.friendly_error("ItemFailed: stalled at 812s, 3 recovery attempts failed")         == "Playback froze and could not be restarted."
     assert state.friendly_error(None) is None
+
+
+def test_locked_beats_failed_like_the_recorder(tmp_path):
+    configure(tmp_path, tmp_path / "out")
+    write(tmp_path / "queue.json", [{"id": "x", "url": "https://x/x", "title": "X", "locked": True}])
+    write(tmp_path / "progress.json", {"x": {"status": "failed", "title": "X", "error": "e"}})
+    assert state.snapshot(tmp_path)["items"][0]["state"] == "locked"

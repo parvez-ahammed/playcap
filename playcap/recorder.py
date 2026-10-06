@@ -46,7 +46,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from playcap import cdp, config, jobs, organize
+from playcap import cdp, config, jobs, obs_setup, organize
 from playcap.settings import atomic_write_json
 from playcap.adapters.base import VIDEO_STATE_JS, ItemFailed  # noqa: F401
 from playcap.obs_client import Obs, ObsError
@@ -226,6 +226,9 @@ def connect_obs(relaunch=True):
     # waits for a click, so the websocket server never starts and an
     # unattended run stalls forever. --disable-shutdown-check skips the
     # prompt; --multi skips the "already running" one.
+    # Newer OBS ignores that flag and prompts anyway while crash markers are
+    # left over; clear them first (only acts while OBS is closed).
+    obs_setup.clear_crash_markers()
     subprocess.Popen([str(exe), "--disable-shutdown-check", "--multi"],
                      cwd=str(exe.parent),
                      creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
