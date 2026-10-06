@@ -106,3 +106,26 @@ def test_wait_playable_stops_at_ready_state_3(monkeypatch):
                    {"found": True, "readyState": 4}, {"found": True, "readyState": 0}])
     monkeypatch.setattr(recorder, "state", lambda p: next(states))
     assert recorder.wait_playable(None, seconds=5)["readyState"] == 4
+
+
+def test_capture_blocked_is_an_item_failure_and_has_a_friendly_text():
+    from playcap import state
+    from playcap.adapters.base import CaptureBlocked
+    assert issubclass(CaptureBlocked, recorder.ItemFailed)
+    text = state.friendly_error("CaptureBlocked: capture-blocked: the video is black")
+    assert "hides its video from screen capture" in text and "cannot record" in text
+
+
+def test_move_file_falls_back_to_copy_across_drives(tmp_path, monkeypatch):
+    src, dst = tmp_path / "a.mkv", tmp_path / "sub" / "b.mkv"
+    src.write_bytes(b"x")
+    dst.parent.mkdir()
+
+    def cross_drive(self, target):
+        err = OSError(18, "Invalid cross-device link")
+        raise err
+
+    monkeypatch.setattr(type(src), "rename", cross_drive)
+    monkeypatch.setattr(recorder.time, "sleep", lambda s: None)
+    assert recorder.move_file(src, dst) is True
+    assert dst.read_bytes() == b"x" and not src.exists()

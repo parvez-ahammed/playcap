@@ -6,7 +6,8 @@ click the player (a CDP click is a trusted gesture,
 which is what starts DRM-protected and gesture-gated playback; a synthetic JS
 .click() does not) -> fullscreen the player element so the video renders at
 its native resolution instead of the page's player box -> OBS records the
-screen -> poll the <video> until it ends -> stop, rename, remux to mp4.
+screen -> poll the <video> until it ends -> stop, file it under the library
+layout (playcap.organize), remux to mp4.
 
 Everything site-specific -- which tab, which element is the player, where its
 <video> can be polled, what "logged out" looks like -- comes from the adapter
@@ -27,8 +28,11 @@ queue untouched rather than counted as failures -- run this again after they
 air and only the newly available ones get recorded. Failed items are retried on
 the next run too; only "done" is permanent.
 
-Black frames: some DRM renders black to screen capture while looking fine on
-screen. The DOM cannot show that, so each poll also asks OBS for a tiny
+Black frames: some protected players render black to screen capture while
+looking fine on screen. If the capture is black from the first frame for
+BLOCKED_SECONDS while the page itself was not (preflight), the item fails as
+CaptureBlocked at once and is not retried: that is the player refusing capture,
+and playcap does not work around it. The DOM cannot show that, so each poll also asks OBS for a tiny
 screenshot of the program output and records its mean brightness in
 .playcap/now.json; the UI flags a near-zero value. A short dark stretch is
 only a warning (intros and fades exist), but BLACK_ABORT_SECONDS of unbroken
@@ -54,7 +58,7 @@ from pathlib import Path
 
 from playcap import cdp, config, jobs, obs_setup, organize, record_quality, screen
 from playcap.settings import atomic_write_json
-from playcap.adapters.base import VIDEO_STATE_JS, ItemFailed  # noqa: F401
+from playcap.adapters.base import VIDEO_STATE_JS, CaptureBlocked, ItemFailed  # noqa: F401
 from playcap.obs_client import Obs, ObsError
 
 POLL_SECONDS = 10
@@ -72,6 +76,7 @@ READY_WAIT_SECONDS = 20    # how long to let the player buffer before the first 
 PREFLIGHT_SECONDS = 8      # how long the capture may stay black before recording starts
 BLACK_LUMA = 8.0           # mean program brightness (0-255) below this is "black"
 BLACK_ABORT_SECONDS = 90   # unbroken black this long fails the item
+BLOCKED_SECONDS = 30       # black from the very start this long = capture-blocked player
 
 EXIT_FULLSCREEN_JS = ("(async()=>{if(document.fullscreenElement)"
                       " await document.exitFullscreen(); return true;})()")
@@ -193,10 +198,11 @@ def save_progress(p):
     atomic_write_json(Path(CFG["progress_file"]), p)
 
 
-def safe_name(item, index):
-    """Jellyfin episode name. The queue position is the episode number,
-    so a re-record keeps the number the item already had."""
-    return organize.episode_stem(CFG, index, organize.clean_title(item.title, CFG))
+def library_path(item, index):
+    """Where the finished recording goes, without extension, per the library
+    layout (organize.relpath). The queue position is the number, so a
+    re-record keeps the name the item already had."""
+    return outdir() / organize.relpath(CFG, index, item, organize.clean_title(item.title, CFG))
 
 
 def wait_ready(obs, seconds=120):
@@ -524,7 +530,15 @@ def record_one(item, index, obs, speed, args):
                   flush=True)
             luma = program_luma(obs)
             write_now(item, s, duration, luma, t_started)
-            if black.update(luma, time.time()) > BLACK_ABORT_SECONDS:
+            dark_for = black.update(luma, time.time())
+            # The page was not black a moment ago (preflight), so black from the
+            # first frame on means the player itself hides from capture.
+            if black.since is not None and black.since <= t_started + POLL_SECONDS + 3 \
+                    and dark_for >= BLOCKED_SECONDS:
+                raise CaptureBlocked(
+                    f"capture-blocked: the video is black to screen capture for "
+                    f"{dark_for:.0f}s while it plays (protected player)")
+            if dark_for > BLACK_ABORT_SECONDS:
                 raise ItemFailed(f"capture has been black for over {BLACK_ABORT_SECONDS}s "
                                  "(OBS capturing the wrong/no monitor, or DRM)")
 
@@ -586,29 +600,43 @@ def to_mp4(src):
     return src
 
 
-def finalize(path, item, index):
-    src = Path(path)
-    sdir = organize.show_dir(CFG)
-    sdir.mkdir(parents=True, exist_ok=True)
-    dst = sdir / (safe_name(item, index) + src.suffix)
-    n = 2
-    while dst.exists():                     # a retry re-recorded an existing name
-        dst = sdir / f"{safe_name(item, index)} ({n}){src.suffix}"
-        n += 1
-    for _ in range(10):                     # OBS may still be flushing the muxer
+def move_file(src, dst, tries=10):
+    """Rename, or copy-then-delete when OBS's folder is on another drive than
+    the library (a rename cannot cross drives: WinError 17 / EXDEV). Retries
+    while OBS may still be flushing the muxer. -> True when dst holds the file."""
+    for _ in range(tries):
         try:
             src.rename(dst)
-            break
-        except OSError:
+            return True
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 17 or exc.errno == 18:   # EXDEV
+                try:
+                    shutil.move(str(src), str(dst))
+                    return True
+                except OSError:
+                    pass
             time.sleep(1)
-    else:
-        print(f"    could not rename {src.name}; left in place")
+    return False
+
+
+def finalize(path, item, index):
+    src = Path(path)
+    base = library_path(item, index)
+    base.parent.mkdir(parents=True, exist_ok=True)
+    dst = Path(f"{base}{src.suffix}")
+    n = 2
+    while dst.exists():                     # a retry re-recorded an existing name
+        dst = Path(f"{base} ({n}){src.suffix}")
+        n += 1
+    if not move_file(src, dst):
+        print(f"    could not move {src.name}; left in place")
         dst = src
     dst = to_mp4(dst)
-    # Without this Jellyfin falls back to the filename and shows it truncated.
-    dst.with_suffix(".nfo").write_text(
-        organize.episode_nfo(item, index, organize.clean_title(item.title, CFG), CFG),
-        encoding="utf-8")
+    if organize.write_nfo(CFG):
+        # Without it a media server falls back to the filename, truncated.
+        dst.with_suffix(".nfo").write_text(
+            organize.episode_nfo(item, index, organize.clean_title(item.title, CFG), CFG),
+            encoding="utf-8")
     size = dst.stat().st_size / 1024 ** 3
     print(f"    wrote {dst.name}  ({size:.2f} GB)")
     return str(dst), size
@@ -706,6 +734,19 @@ def main(argv=None):
                     label = ("skipped" if isinstance(exc, ItemFailed)
                              else exc.__class__.__name__)
                     print(f"    !! {label}: {exc}")
+                    if isinstance(exc, CaptureBlocked):
+                        # Same page, same player, same result: do not retry,
+                        # and do not count it towards the failure cooldown.
+                        print("    this player hides its video from screen capture; "
+                              "playcap cannot record it (not retried)")
+                        try:
+                            if obs.record_status()["outputActive"]:
+                                obs.stop_record()
+                        except Exception:
+                            pass
+                        progress[it.id] = {"status": "failed", "title": it.title,
+                                           "error": f"CaptureBlocked: {exc}"[:300]}
+                        break
                     if isinstance(exc, cdp.CdpError):
                         ensure_chrome()
                     try:

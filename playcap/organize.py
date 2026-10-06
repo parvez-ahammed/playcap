@@ -1,21 +1,31 @@
-"""Lay the recordings out as a Jellyfin TV series and give each one real metadata.
+"""Where each recording goes and what it is called.
 
-Jellyfin shows the raw filename when nothing matches a metadata provider, and
-a filename truncated mid-word is worse. So we do two things: name each file
-SxxEyy like an episode, and drop an .nfo beside it that carries the
-untruncated title, the air date and the full description.
+A recording is filed by a name template, relative to output_dir. Three layouts:
 
-    <output_dir>/<show>/Season 01/S01E07 - Some Topic- II.mp4
-                                  S01E07 - Some Topic- II.nfo
+    folder        (default)  {show}/{n:02} - {title}
+                             My Recordings/03 - Product webinar.mp4
+    media_server             {show}/Season {season:02}/S{season:02}E{n:02} - {title}
+                             My Recordings/Season 01/S01E03 - Product webinar.mp4
+                             + an .nfo beside each file and a tvshow.nfo, so media
+                             servers (Jellyfin, Emby, Plex, Kodi) show real titles
+                             and dates instead of the filename
+    custom                   config "name_template", same placeholders
 
-Episode numbers are queue positions, so a later re-record lands on the same
-number. Show name, season, and the title clean-up all come from config
+Placeholders: {show} {season} {n} (queue position, also {episode}) {title}
+{date} (YYYY-MM-DD, empty when unknown) {time} (HH-MM) {kind} {id}. Format
+specs work: {n:03}. "/" makes folders. Every folder and file name is made safe
+for Windows, and parts left empty by a missing {date} lose their dangling
+separators, so a template never produces "/ - Title".
+
+Numbers are queue positions, so a re-record lands on the same name. .nfo files
+are written for media_server unless "write_nfo" says otherwise; any layout can
+turn them on. Show name, season, and the title clean-up come from config
 ("show", "season", "title_cleanup", "title_collapse_restated",
 "title_max_len", "show_plot", "show_premiered") -- a site adapter usually
 supplies them as defaults.
 
 Usage:  python -m playcap.organize --dry-run     # show the plan
-        python -m playcap.organize               # move files and write the .nfo files
+        python -m playcap.organize               # move files (and write .nfo files)
 """
 import argparse
 import json
@@ -26,8 +36,81 @@ from xml.sax.saxutils import escape
 
 from playcap import config
 
+LAYOUTS = {
+    "folder": "{show}/{n:02} - {title}",
+    "media_server": "{show}/Season {season:02}/S{season:02}E{n:02} - {title}",
+}
+PLACEHOLDERS = ("show", "season", "n", "episode", "title", "date", "time", "kind", "id")
+
+
+def layout(cfg):
+    return cfg.get("library_layout") or "folder"
+
+
+def name_template(cfg):
+    if layout(cfg) == "custom":
+        return cfg.get("name_template") or LAYOUTS["folder"]
+    return LAYOUTS.get(layout(cfg), LAYOUTS["folder"])
+
+
+def write_nfo(cfg):
+    if cfg.get("write_nfo") is not None:
+        return bool(cfg["write_nfo"])
+    return layout(cfg) == "media_server"
+
+
+def fields(cfg, index, item, title):
+    when = getattr(item, "aired_at", None)
+    return {"show": cfg.get("show") or "Recordings", "season": int(cfg.get("season") or 1),
+            "n": index, "episode": index, "title": title,
+            "date": when.strftime("%Y-%m-%d") if when else "",
+            "time": when.strftime("%H-%M") if when else "",
+            "kind": getattr(item, "kind", "") or "", "id": getattr(item, "id", "") or ""}
+
+
+def _render(template, values):
+    out = template.format(**values)
+    parts = []
+    for part in re.split(r"[\\/]", out):
+        part = re.sub(r"^[\s\-_.,]+|[\s\-_,]+$", "", safe(part))
+        if part and part not in (".", ".."):
+            parts.append(part)
+    if not parts:
+        raise ValueError("the template produced an empty name")
+    return Path(*parts)
+
+
+def relpath(cfg, index, item, title):
+    """Path of the recording under output_dir, without the file extension."""
+    return _render(name_template(cfg), fields(cfg, index, item, title))
+
+
+def check_template(template):
+    """-> error message, or None when the template renders."""
+    sample = {"show": "Show", "season": 1, "n": 3, "episode": 3, "title": "Title",
+              "date": "2026-01-31", "time": "14-00", "kind": "video", "id": "abc123"}
+    try:
+        _render(template, sample)
+        _render(template, {**sample, "date": "", "time": ""})
+    except KeyError as exc:
+        return f"Unknown placeholder {{{exc.args[0]}}}. Use: " + " ".join("{%s}" % p for p in PLACEHOLDERS)
+    except (ValueError, IndexError) as exc:
+        return f"Template does not work: {exc}"
+    if "{n" not in template and "{episode" not in template and "{id" not in template:
+        return "Include {n} (or {id}) so two items cannot get the same name."
+    return None
+
+
+def show_root(cfg):
+    """The top folder of the library: the template's first folder when it
+    has one (normally {show}), else output_dir itself."""
+    rel = _render(name_template(cfg), fields(cfg, 1, None, "x"))
+    out = Path(cfg["output_dir"])
+    return out / rel.parts[0] if len(rel.parts) > 1 else out
+
 
 def show_dir(cfg):
+    """Kept for callers that still want the media-server season folder."""
     return Path(cfg["output_dir"]) / cfg["show"] / f"Season {int(cfg['season']):02d}"
 
 
@@ -40,7 +123,7 @@ def episode_label(cfg, index):
 
 
 def episode_stem(cfg, index, title):
-    """The recorder's name: safe() runs on the stem, so a title truncated to
+    """Media-server stem. safe() runs on the stem, so a title truncated to
     "..." loses its dots before the extension is added."""
     return safe(f"{episode_label(cfg, index)} - {title}")
 
@@ -118,7 +201,6 @@ def main(argv=None):
 
     cfg, adapter = config.load()
     outdir = Path(cfg["output_dir"])
-    sdir = show_dir(cfg)
     progress_path = Path(cfg["progress_file"])
     raws = json.loads(Path(cfg["queue_file"]).read_text())
     progress = json.loads(progress_path.read_text())
@@ -138,14 +220,12 @@ def main(argv=None):
                 continue
             src = alt
         title = clean_title(item.title, cfg)
-        # organize.py has always run safe() over the whole file name, suffix
-        # included; keep that so existing libraries map to the same paths.
-        dst = sdir / safe(f"{episode_label(cfg, ep)} - {title}{src.suffix}")
+        dst = outdir / (str(relpath(cfg, ep, item, title)) + src.suffix)
         moves.append((src, dst, item, ep, title))
 
     moves.sort(key=lambda m: m[3])
     for src, dst, item, ep, title in moves:
-        print(f"  E{ep:02d}  {aired(item)}  {title}")
+        print(f"  #{ep:02d}  {aired(item) or '-'}  {title}")
         print(f"        {src.name}")
         print(f"     -> {dst.relative_to(outdir)}")
 
@@ -160,18 +240,22 @@ def main(argv=None):
         print(f"\n{len(moves)} episodes, {len(strays)} partials (dry run)")
         return
 
-    sdir.mkdir(parents=True, exist_ok=True)
-    (outdir / cfg["show"] / "tvshow.nfo").write_text(show_nfo(cfg), encoding="utf-8")
+    nfo = write_nfo(cfg)
+    if nfo and layout(cfg) == "media_server":
+        show_root(cfg).mkdir(parents=True, exist_ok=True)
+        (show_root(cfg) / "tvshow.nfo").write_text(show_nfo(cfg), encoding="utf-8")
 
     progress_changed = False
     for src, dst, item, ep, title in moves:
+        dst.parent.mkdir(parents=True, exist_ok=True)
         if src.resolve() != dst.resolve():
             shutil.move(str(src), str(dst))
-        dst.with_suffix(".nfo").write_text(episode_nfo(item, ep, title, cfg),
-                                           encoding="utf-8")
+        if nfo:
+            dst.with_suffix(".nfo").write_text(episode_nfo(item, ep, title, cfg),
+                                               encoding="utf-8")
         progress[item.id]["file"] = str(dst)
         progress_changed = True
-        print(f"  E{ep:02d} {dst.name}")
+        print(f"  #{ep:02d} {dst.relative_to(outdir)}")
 
     if strays:
         partial_dir(cfg).mkdir(exist_ok=True)
@@ -180,7 +264,7 @@ def main(argv=None):
 
     if progress_changed:
         progress_path.write_text(json.dumps(progress, indent=1))
-    print(f"\n{len(moves)} episodes -> {sdir}")
+    print(f"\n{len(moves)} recordings filed under {outdir} ({layout(cfg)} layout)")
     print(f"{len(strays)} partials -> {partial_dir(cfg)}")
 
 

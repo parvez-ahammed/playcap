@@ -41,6 +41,12 @@ class ItemFailed(RuntimeError):
     """This item could not be recorded this time; retry later."""
 
 
+class CaptureBlocked(ItemFailed):
+    """The page plays, but its video reaches screen capture as black: the
+    player uses protected playback. Retrying cannot change that, and playcap
+    does not work around it (see RESPONSIBLE_USE.md)."""
+
+
 @dataclass
 class Item:
     id: str

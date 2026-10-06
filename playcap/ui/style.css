@@ -142,3 +142,6 @@ table.list { width: 100%; border-collapse: collapse; }
 .adv summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .advgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 16px; margin-top: 10px; }
 .advgrid select, .advgrid input { width: 100%; }
+.check { display: block; margin: 10px 0; }
+.check input { margin-right: 8px; }
+code#name-preview { font-size: 13px; }

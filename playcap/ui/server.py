@@ -63,7 +63,7 @@ def _progress_path(root):
         return Path(root) / "progress.json"
 
 
-def _queue_ids(root):
+def _queue_items(root):
     cfg = settings.read(root)
     merged, adapter = state._effective(cfg)
     raw = state._read_json(Path(root) / merged["queue_file"], [])
@@ -71,10 +71,14 @@ def _queue_ids(root):
     for r in raw:
         try:
             it = adapter.item(r)
-            out[str(it.id)] = it.title
+            out[str(it.id)] = it
         except Exception:
             continue
     return out
+
+
+def _queue_ids(root):
+    return {k: it.title for k, it in _queue_items(root).items()}
 
 
 def edit_item(root, action, item_id):
@@ -229,14 +233,25 @@ def job_action(root, action, name, mode="now", item=None):
             cfg, _ = state._effective(raw)
         except Exception as exc:
             return False, f"The selected source cannot be loaded: {exc}"
+        st = jobs.status(root)
+        if name == "test" and (st["record"]["running"] or st["optimize"]["running"]):
+            return False, "Stop recording and re-compressing first; the test uses OBS and the browser."
+        if name == "record" and st["test"]["running"]:
+            return False, "A 25 s test is running; start recording when it finishes."
         if item:
-            # One item only (the queue row's Record button). Validated against
-            # the queue so nothing but a known id ever reaches the command line.
-            if name != "record":
-                return False, "Only recording can target one item."
-            if str(item) not in _queue_ids(root):
+            # One item only (the queue row's Record / Test buttons). Validated
+            # against the queue so nothing but a known item ever reaches the
+            # command line: the id for record, that item's queued URL for test.
+            if name not in ("record", "test"):
+                return False, "Only recording and testing can target one item."
+            known = _queue_items(root)
+            if str(item) not in known:
                 return False, "No such item in the queue."
+            if name == "test":
+                return jobs.start(name, root, cfg, args=[known[str(item)].url])
             return jobs.start(name, root, cfg, args=["--id", str(item)])
+        if name == "test":
+            return False, "Pick an item to test."
         return jobs.start(name, root, cfg)
     if action == "stop":
         return True, jobs.stop(name, root, mode=mode)

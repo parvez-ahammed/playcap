@@ -15,6 +15,10 @@ not given -- a hand-written config.json with extra keys survives the UI.
 Writes go to a temp file in the same directory and are swapped in with
 os.replace, so a crash mid-save leaves the old file, never half of a new one.
 
+Library-layout keys (library_layout, name_template, write_nfo) are checked
+against playcap.organize: a custom template must render and include {n} or
+{id}.
+
 Recording-quality keys (record_mode, record_crf, video_bitrate_kbps,
 x264_preset, keyframe_seconds) are checked by record_quality.validate and
 stored as numbers; they reach OBS the next time playcap starts it.
@@ -147,6 +151,27 @@ def validate(partial, root):
     if "links" in partial and not _clean_links(partial["links"]):
         errors["links"] = "Add at least one page URL."
     errors.update(record_quality.validate(partial))
+    errors.update(_validate_layout(partial))
+    return errors
+
+
+LAYOUTS = ("folder", "media_server", "custom")
+
+
+def _validate_layout(partial):
+    from playcap import organize
+    errors = {}
+    layout = partial.get("library_layout")
+    if layout is not None and layout not in LAYOUTS:
+        errors["library_layout"] = "Pick folder, media server or custom."
+    if layout == "custom" or (layout is None and partial.get("name_template")):
+        msg = organize.check_template(str(partial.get("name_template") or ""))
+        if not str(partial.get("name_template") or "").strip():
+            msg = "Write a name template, e.g. {show}/{date} - {title} ({n})"
+        if msg:
+            errors["name_template"] = msg
+    if "write_nfo" in partial and partial["write_nfo"] not in (True, False, None):
+        errors["write_nfo"] = "Should be on, off or automatic."
     return errors
 
 

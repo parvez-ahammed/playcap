@@ -265,3 +265,37 @@ def test_obs_setup_gives_up_with_a_message_not_a_500(tmp_path, monkeypatch):
     monkeypatch.setattr(oc, "Obs", refuse)
     ok, msg = server.obs_action(tmp_path, "setup")
     assert not ok and "still starting" in msg
+
+
+def test_test_job_passes_only_the_queued_url(tmp_path, monkeypatch):
+    from playcap.ui import server
+    from playcap import jobs
+    started = {}
+    monkeypatch.setattr(server.settings, "read", lambda root: {"output_dir": str(tmp_path)})
+    monkeypatch.setattr(server.settings, "is_configured", lambda cfg: True)
+    monkeypatch.setattr(server.state, "_effective", lambda raw: ({"output_dir": str(tmp_path)}, None))
+    idle = {"running": False}
+    monkeypatch.setattr(jobs, "status", lambda root: {n: dict(idle) for n in jobs.NAMES})
+
+    class It:
+        title, url = "Talk", "https://example.com/talk"
+
+    monkeypatch.setattr(server, "_queue_items", lambda root: {"abc": It()})
+    monkeypatch.setattr(jobs, "start", lambda name, root, cfg, args=(): started.update(name=name, args=args) or (True, "started"))
+    assert server.job_action(tmp_path, "start", "test", item="abc")[0]
+    assert started == {"name": "test", "args": ["https://example.com/talk"]}
+    assert not server.job_action(tmp_path, "start", "test", item="nope")[0]
+    assert not server.job_action(tmp_path, "start", "test")[0]
+
+
+def test_test_job_refused_while_recording(tmp_path, monkeypatch):
+    from playcap.ui import server
+    from playcap import jobs
+    monkeypatch.setattr(server.settings, "read", lambda root: {"output_dir": str(tmp_path)})
+    monkeypatch.setattr(server.settings, "is_configured", lambda cfg: True)
+    monkeypatch.setattr(server.state, "_effective", lambda raw: ({"output_dir": str(tmp_path)}, None))
+    st = {n: {"running": False} for n in jobs.NAMES}
+    st["record"] = {"running": True}
+    monkeypatch.setattr(jobs, "status", lambda root: st)
+    ok, msg = server.job_action(tmp_path, "start", "test", item="abc")
+    assert not ok and "Stop recording" in msg

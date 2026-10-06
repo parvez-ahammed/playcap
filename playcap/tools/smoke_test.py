@@ -14,7 +14,9 @@ import time
 from playcap import cdp, config
 from playcap.adapters.base import VIDEO_STATE_JS, Item
 from playcap.obs_client import Obs, ObsError
-from playcap.recorder import EXIT_FULLSCREEN_JS, gesture
+from playcap import screen
+from playcap.adapters.base import ItemFailed
+from playcap.recorder import EXIT_FULLSCREEN_JS, gesture, start_playback
 
 RECORD_SECONDS = 25
 
@@ -87,32 +89,29 @@ def main(url):
     read = lambda: player.session.js_json(VIDEO_STATE_JS % player.video)  # noqa: E731
     print("    video:", read())
 
-    step(5, "Click centre of player to start playback (trusted gesture)")
-    sess.click(rect["x"] + rect["w"] / 2, rect["y"] + rect["h"] / 2)
-    time.sleep(4)
-    st = read()
-    print("    video:", st)
-    if not st.get("found"):
-        fail("No <video> where the adapter said the player is.")
-    if st["t"] <= 0.1 or st["paused"]:
-        print("    !! not advancing; retrying with a second click + space key")
-        sess.click(rect["x"] + rect["w"] / 2, rect["y"] + rect["h"] / 2)
-        sess.key(" ", code="Space", vk=32)
-        time.sleep(4)
-        st = read()
-        print("    video:", st)
-        if st["t"] <= 0.1:
-            fail("Playback would not start via CDP input.")
+    step(5, "Aim OBS at this browser and keep it on top (as the recorder does)")
+    moved = screen.aim_capture(obs, screen.window_bounds(sess))
+    print("   ", moved or "OBS already captures the browser's monitor")
+    pin = screen.Pin(sess).__enter__()
+    if pin.note:
+        print("   ", pin.note)
+
+    step(6, "Start playback: wait until playable, then a trusted click (recorder.start_playback)")
+    try:
+        st = start_playback(sess, player, rect)
+    except ItemFailed as exc:
+        pin.__exit__(None, None, None)
+        fail(f"Playback would not start via CDP input ({exc}).")
     print(f"    PLAYING -- duration {st['duration']:.1f}s, {st['w']}x{st['h']}")
 
-    step(6, "Fullscreen")
+    step(7, "Fullscreen")
     if not gesture(sess, adapter.fullscreen_js(rect)):
         fail("fullscreen failed")
     time.sleep(3)
     print("    after:", sess.js("JSON.stringify({w: innerWidth, h: innerHeight, "
                                  "fs: !!document.fullscreenElement})"))
 
-    step(7, f"OBS record {RECORD_SECONDS}s")
+    step(8, f"OBS record {RECORD_SECONDS}s")
     obs.start_record()
     t0 = time.time()
     while time.time() - t0 < RECORD_SECONDS:
@@ -124,18 +123,37 @@ def main(url):
     time.sleep(2)
     print("    wrote:", path)
 
-    step(8, "Verify the capture is not black")
+    step(9, "Verify the capture is not black")
     mean, err = black_check(cfg["ffmpeg"], path)
     if mean is None:
         print("    could not decode a frame:", err)
     else:
         print(f"    mean luma = {mean:.1f} "
-              f"({'BLACK -- DRM blocked the capture' if mean < 3 else 'OK, real picture'})")
+              f"({'BLACK' if mean < 3 else 'OK, real picture'})")
+        if mean < 3:
+            print("    Either OBS is capturing the wrong screen (check the 'playcap' scene in\n"
+                  "    OBS), or this site's player hides its video from screen capture\n"
+                  "    (protected playback). playcap records only what the screen shows and\n"
+                  "    does not work around protected players, so such a site cannot be recorded.")
+
+    # Keep the test clip, but out of the library: it is not an item.
+    try:
+        from pathlib import Path
+        keep = Path(cfg["output_dir"]) / "_partial" / "tests"
+        keep.mkdir(parents=True, exist_ok=True)
+        moved = keep / Path(path).name
+        from playcap.recorder import move_file
+        if not move_file(Path(path), moved, tries=3):
+            raise OSError("move failed")
+        print("    test clip kept at:", moved)
+    except OSError as exc:
+        print("    test clip left at:", path, f"({exc})")
 
     try:
         gesture(sess, EXIT_FULLSCREEN_JS, timeout=10)
     except Exception:
         sess.key("Escape", code="Escape", vk=27)
+    pin.__exit__(None, None, None)
     obs.close()
     print("\nSmoke test finished.")
 

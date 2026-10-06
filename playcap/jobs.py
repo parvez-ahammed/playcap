@@ -40,13 +40,14 @@ from pathlib import Path
 from playcap import adapters, settings
 
 STATE_DIR = ".playcap"
-NAMES = ("browser", "queue", "record", "optimize")
+NAMES = ("browser", "queue", "record", "optimize", "test")
 MODULES = {"queue": "playcap.build_queue", "record": "playcap.recorder",
-           "optimize": "playcap.optimize"}
+           "optimize": "playcap.optimize", "test": "playcap.tools.smoke_test"}
 # (stdout log, separate stderr log or None). optimize keeps ffmpeg's -stats
 # on stderr because status/state parse progress from optimize.err.
 LOGS = {"browser": ("chrome_launch.log", None), "queue": ("build_queue.log", None),
-        "record": ("record_run.log", None), "optimize": ("optimize.log", "optimize.err")}
+        "record": ("record_run.log", None), "optimize": ("optimize.log", "optimize.err"),
+        "test": ("test_run.log", None)}
 EXCLUSIVE = {"record": "optimize", "optimize": "record"}
 START_TOLERANCE_S = 10   # PID-file start time vs. the process's real creation time
 

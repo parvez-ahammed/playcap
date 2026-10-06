@@ -5,12 +5,12 @@ OBS writes everything at a constant bitrate (8.16 Mbps in the original
 setup), which is ~4x more than a camera-on-a-whiteboard / camera-on-a-page
 feed needs. CRF 24 reproduces the same
 picture at ~2 Mbps and, with a 2 s keyframe interval + faststart, also fixes
-the seeking stalls in Emby's browser player.
+the seeking stalls in media-server browser players.
 
 Layout after a run:
 
-    <output_dir>/...            optimized .mp4 + .nfo   <- what Emby scans
-    <output_dir>_originals/...  the untouched .mkv      <- outside Emby's root
+    <output_dir>/...            optimized .mp4 (+ .nfo) <- what you (or a media server) see
+    <output_dir>_originals/...  the untouched .mkv      <- outside the library
 
 The original is only moved after the new file has been verified to run the
 full length, so a crashed encode can never lose the source. Keep that
@@ -37,11 +37,11 @@ sidecar file, is verified against the source, the source is archived, and
 only then does the sidecar take the episode's name. Files touched in the
 last FRESH_MINUTES are skipped -- that is a remux still being written.
 
-Only files inside a folder of the library count. The recorder always files
-an item under <show>/Season NN/, so a video lying loose in the library root
-was never filed: a raw OBS file left by a crash, a hard kill or a smoke test.
-A live run encoded one of those as the next "episode". They are listed and
-skipped; file or delete them by hand.
+Raw OBS files ("YYYY-MM-DD HH-MM-SS.mkv") in the library root are skipped.
+The recorder always renames what it files (playcap.organize), so a video
+still carrying OBS's name was never filed: a crash, a hard kill or a smoke
+test left it. A live run encoded one of those as the next "episode". They are
+listed and skipped; file or delete them by hand.
 
 Audio that is already AAC is stream-copied, not re-encoded: the old
 `-c:a aac -b:a 96k -ac 1` downmix emitted a malformed frame on one episode,
@@ -66,6 +66,7 @@ failed, and the source is untouched -- a rerun picks the episode up again.
 """
 import argparse
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -81,7 +82,7 @@ CFG = {}
 FFMPEG = FFPROBE = LIB = ARCHIVE = STATE = None
 
 DURATION_TOLERANCE = 2.0   # seconds; a good re-encode matches the source
-# Emby scans the library live, so the half-written file must not look like a
+# Media servers scan the library live, so the half-written file must not look like a
 # video to it. Anything but a known media extension will do.
 PART_SUFFIX = ".optpart"
 FRESH_MINUTES = 15         # younger .mp4 may still be mid-remux by the recorder
@@ -127,18 +128,27 @@ def sources(state):
     done = finished(state)
     fresh = time.time() - FRESH_MINUTES * 60
     live = [p for p in LIB.rglob("*.mkv") if "_partial" not in p.parts
-            and p.parent != LIB]
+            and not is_unfiled(p)]
     live += [p for p in LIB.rglob("*.mp4") if "_partial" not in p.parts
-             and p.parent != LIB and p not in done and p.stat().st_mtime < fresh]
+             and not is_unfiled(p) and p not in done and p.stat().st_mtime < fresh]
     archived = ([p for ext in ("*.mkv", "*.mp4") for p in ARCHIVE.rglob(ext)]
                 if ARCHIVE.exists() else [])
     return sorted(live + archived, key=lambda p: p.name)
 
 
+# OBS's default file name. The recorder always renames what it files, so a
+# video still called this was never filed.
+OBS_NAME = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}\.(mkv|mp4)$")
+
+
+def is_unfiled(p):
+    return p.parent == LIB and bool(OBS_NAME.match(p.name))
+
+
 def loose():
-    """Videos lying directly in the library root: never filed by the recorder."""
+    """Raw OBS files in the library root: never filed by the recorder."""
     _setup()
-    return sorted(p for ext in ("*.mkv", "*.mp4") for p in LIB.glob(ext))
+    return sorted(p for ext in ("*.mkv", "*.mp4") for p in LIB.glob(ext) if is_unfiled(p))
 
 
 def in_library(src):
@@ -228,7 +238,7 @@ def encode(src, dst, crf, preset):
 
 def archive(src):
     """Move the original out of the library. The .nfo stays behind: its
-    basename already matches the new .mp4, which is what Emby reads."""
+    basename already matches the new .mp4, which is what a media server reads."""
     dest = in_archive(src)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dest))

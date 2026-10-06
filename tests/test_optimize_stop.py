@@ -72,7 +72,9 @@ def test_loose_root_videos_are_never_episodes(tmp_path, monkeypatch):
     monkeypatch.setattr(optimize, "ARCHIVE", tmp_path / "lib_originals")
     monkeypatch.setattr(optimize, "finished", lambda state: set())
     assert [p.name for p in optimize.sources({})] == ["S01E01 - Real.mkv"]
-    assert [p.name for p in optimize.loose()] == ["2026-10-06 13-54-14.mkv", "stray.mp4"]
+    # A root .mp4 with a real name is a library file (custom layouts may file
+    # into the root); only OBS's own timestamp names count as unfiled.
+    assert [p.name for p in optimize.loose()] == ["2026-10-06 13-54-14.mkv"]
 
 
 def test_crf_recordings_are_not_encoded_again(tmp_path, monkeypatch, capsys):

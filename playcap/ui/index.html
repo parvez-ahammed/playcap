@@ -56,10 +56,24 @@
         <small class="err" data-err="output_dir"></small>
       </label>
       <label class="field">
-        <span>Library name <small class="muted">(shown as the series name in Jellyfin/Emby)</small></span>
+        <span>Library name <small class="muted">(the folder your recordings go in)</small></span>
         <input id="show" type="text">
         <small class="err" data-err="show"></small>
       </label>
+
+      <h3 class="qhead">File names</h3>
+      <p class="muted small">How each recording is named and filed. Numbers follow the queue order, so a
+        re-recorded item keeps its name.</p>
+      <div id="layouts" class="sources" role="radiogroup"></div>
+      <label class="field" id="template-field" hidden>
+        <span>Name template <small class="muted">use / for folders</small></span>
+        <input id="name_template" type="text" spellcheck="false" placeholder="{show}/{date} - {title} ({n})">
+        <small class="muted">Placeholders: {show} {n} {title} {date} {time} {season} {kind} {id}. Number padding: {n:03}.</small>
+        <small class="err" data-err="name_template"></small>
+      </label>
+      <label class="check"><input id="write_nfo" type="checkbox"> Write .nfo files with title and date
+        <small class="muted">(lets media servers such as Jellyfin, Emby, Plex or Kodi show real titles)</small></label>
+      <p class="muted small">Example: <code id="name-preview"></code></p>
 
       <h3 class="qhead">Recording quality</h3>
       <p class="muted small">How OBS compresses the video while it records. Quality modes keep the picture

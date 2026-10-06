@@ -1,4 +1,4 @@
-"""File recordings as a Jellyfin TV series. Thin wrapper so `python organize.py` keeps working.
+"""File recordings under the configured naming layout. Thin wrapper so `python organize.py` keeps working.
 
 See playcap/organize.py.
 """

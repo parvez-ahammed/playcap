@@ -87,6 +87,10 @@ def _effective(cfg):
 
 
 FRIENDLY_ERRORS = [   # (substring of the raw error, what to tell a person)
+    ("CaptureBlocked", "This site's player hides its video from screen capture (protected playback). The page shows it, OBS gets black. playcap records only what the screen shows, so it cannot record this item."),
+    ("black before recording", "OBS showed a black screen before recording started. "
+                               "Check OBS's capture source (Set up recording scene)."),
+    ("capture has been black", "The recording went black part way and stayed black."),
     ("debug port unreachable", "The playcap browser was closed."),
     ("Cannot reach obs-websocket", "OBS was not running."),
     ("OBS refused", "OBS rejected the websocket password."),

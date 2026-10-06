@@ -33,7 +33,7 @@ DEFAULTS = {
     "record_crf": 24,             # 18 (near-lossless, big) .. 30 (small, soft)
     "video_bitrate_kbps": 2500,   # bitrate mode only
     "x264_preset": "veryfast",    # slower = smaller file for the same quality, more CPU
-    "keyframe_seconds": 2,        # short GOP = fast seeking in Jellyfin/Emby players
+    "keyframe_seconds": 2,        # short GOP = fast seeking in any player
 }
 KEYS = tuple(DEFAULTS)
 

@@ -12,9 +12,11 @@ Entries that are not URLs are treated as file paths relative to the queue
 source and turned into file:// URLs, which is how examples/demo works with no
 server at all.
 
-The player is the first laid-out <video> on the page; failing that, the first
-laid-out iframe -- looked into directly when it is same-origin, attached to as
-its own CDP target when it is cross-origin (Chrome runs those out of process).
+The player is the largest laid-out <video> on the page; failing that, the
+largest laid-out iframe -- looked into directly when it is same-origin,
+attached to as its own CDP target when it is cross-origin (Chrome runs those
+out of process). When a page fools that guess, config "player_selector" (a CSS
+selector, also in the setup wizard) names the player element instead.
 
 No logins, no cookies, no tokens: the page must already play in the debug
 browser exactly as it would for you by hand.
@@ -28,30 +30,45 @@ from urllib.parse import unquote, urlparse
 from playcap import cdp
 from playcap.adapters.base import VIDEO, Adapter as Base, Player
 
-# Where's the player? Elements under 50 px are not laid out yet.
+# Where's the player? The largest laid-out <video> wins (ads and preview
+# thumbnails are smaller); failing that, the largest laid-out iframe. A
+# configured CSS selector ("player_selector") overrides the guess: it may name
+# the <video>, the player's <iframe>, or a container holding a <video>.
+# Elements under 50 px are not laid out yet. %s is the selector, JSON-encoded.
 FIND_PLAYER_JS = r"""
 JSON.stringify((() => {
+  const sel = %s;
   const box = el => { const r = el.getBoundingClientRect();
                       return (r.width >= 50 && r.height >= 50) ? r : null; };
   const out = (r, where, index, src) =>
     ({x: r.x, y: r.y, w: r.width, h: r.height, where, index, src: (src || '').slice(0, 120)});
   const videos = [...document.querySelectorAll('video')];
-  for (let i = 0; i < videos.length; i++) {
-    const r = box(videos[i]);
-    if (r) return out(r, 'page', i, videos[i].currentSrc || videos[i].src);
-  }
   const frames = [...document.querySelectorAll('iframe')];
-  for (let i = 0; i < frames.length; i++) {
-    const r = box(frames[i]);
-    if (!r) continue;
+  const frameHit = (f, r) => {
     let doc = null;
-    try { doc = frames[i].contentDocument; } catch (e) {}
-    if (doc) {
-      if (doc.querySelector('video')) return out(r, 'frame-same', i, frames[i].src);
-      continue;
-    }
-    return out(r, 'frame', i, frames[i].src);
+    try { doc = f.contentDocument; } catch (e) {}
+    if (doc) return doc.querySelector('video') ? out(r, 'frame-same', frames.indexOf(f), f.src) : null;
+    return out(r, 'frame', frames.indexOf(f), f.src);
+  };
+  if (sel) {
+    const e = document.querySelector(sel);
+    const r = e && box(e);
+    if (!r) return null;                       // configured player not on screen (yet)
+    if (e.tagName === 'VIDEO') return out(r, 'page', videos.indexOf(e), e.currentSrc || e.src);
+    if (e.tagName === 'IFRAME') return frameHit(e, r);
+    const v = e.querySelector('video');
+    if (v) return out(r, 'page', videos.indexOf(v), v.currentSrc || v.src);
+    const f = e.querySelector('iframe');
+    return f ? frameHit(f, box(f) || r) : null;
   }
+  const area = r => r.width * r.height;
+  let best = null;
+  videos.forEach((v, i) => { const r = box(v);
+    if (r && (!best || area(r) > area(best.r))) best = {r, i, src: v.currentSrc || v.src}; });
+  if (best) return out(best.r, 'page', best.i, best.src);
+  const ranked = frames.map(f => ({f, r: box(f)})).filter(x => x.r)
+                       .sort((a, b) => area(b.r) - area(a.r));
+  for (const {f, r} of ranked) { const hit = frameHit(f, r); if (hit) return hit; }
   return null;
 })())
 """
@@ -120,6 +137,11 @@ class Adapter(Base):
         "label": "Pages to record, one per line",
         "help": "A page URL per line, or \"Title | URL\". Each page must play an HTML5 video "
                 "in the playcap browser window.",
+    }, {
+        "key": "player_selector", "kind": "text", "optional": True,
+        "label": "Player element (optional, CSS selector)",
+        "help": "Leave empty: playcap picks the largest video on the page. Fill in only if it "
+                "picks the wrong one, e.g. #main-player video or iframe.player.",
     }]
 
     def build_queue(self, cfg, argv):
@@ -130,7 +152,8 @@ class Adapter(Base):
         return read_queue_source(src)
 
     def find_player(self, sess):
-        return sess.js_json(FIND_PLAYER_JS)
+        sel = (self.cfg or {}).get("player_selector") or ""
+        return sess.js_json(FIND_PLAYER_JS % json.dumps(sel))
 
     def attach_player(self, sess, rect):
         if rect["where"] == "page":

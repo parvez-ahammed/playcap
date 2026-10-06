@@ -224,6 +224,9 @@ function renderQueue() {
       actions.push(el("button", { class: "btn small", text: "Record",
         title: "Record just this one, then stop",
         onclick: () => job("start", "record", { item: i.id }) }));
+      if (!isRunning("test")) actions.push(el("button", { class: "btn small ghost", text: "Test 25 s",
+        title: "Play this page for 25 s, record it, and check the picture is not black. Result under Logs.",
+        onclick: () => job("start", "test", { item: i.id }) }));
     }
     if (!rec) {
       if (i.state === "failed") actions.push(el("button", { class: "btn small", text: "Retry",
@@ -261,7 +264,7 @@ function renderLibrary() {
   )));
 }
 
-const LOG_NAMES = { record: "Recording", optimize: "Re-compressing", queue: "Queue", browser: "Browser" };
+const LOG_NAMES = { test: "Test run", record: "Recording", optimize: "Re-compressing", queue: "Queue", browser: "Browser" };
 function renderLogs() {
   if (!document.querySelector(".logs").open) return;
   const logs = snap.log || {};
@@ -319,7 +322,64 @@ async function openWizard(cancellable) {
   $("output_dir").value = cfg.output_dir || (setup.root ? setup.root.replace(/[\\/]+$/, "") + (setup.root.includes("\\") ? "\\" : "/") + "recordings" : "");
   $("show").value = cfg.show || "My Recordings";
   renderQuality();
+  renderLayout();
   showStep(1);
+}
+
+// ---- file names (organize.py holds the rules) ----
+const LAYOUT_CHOICES = [
+  ["folder", "Folder", "{show}/{n:02} - {title}", "One folder, numbered files. Works everywhere."],
+  ["media_server", "Media server", "{show}/Season {season:02}/S{season:02}E{n:02} - {title}",
+   "TV-series layout with .nfo files, for Jellyfin, Emby, Plex or Kodi."],
+  ["custom", "Custom", null, "Your own template."],
+];
+let layoutChoice = "folder";
+
+function previewName(template) {
+  const show = $("show").value.trim() || "My Recordings";
+  const v = { show, season: 1, n: 3, episode: 3, title: "Product webinar, part 1",
+              date: "2026-03-14", time: "14-00", kind: "video", id: "a1b2c3" };
+  const out = template.replace(/\{(\w+)(?::0?(\d+))?\}/g, (m, k, w) => {
+    if (!(k in v)) return m;
+    const val = String(v[k]);
+    return w ? val.padStart(Number(w), "0") : val;
+  });
+  return out.split("/").map((p) => p.replace(/[<>:"\\|?*]/g, "-").trim()).filter(Boolean).join(" / ") + ".mp4";
+}
+
+function currentTemplate() {
+  if (layoutChoice === "custom") return $("name_template").value.trim() || "{show}/{n:02} - {title}";
+  return LAYOUT_CHOICES.find((c) => c[0] === layoutChoice)[2];
+}
+
+function renderLayout() {
+  const cfg = setup.config || {};
+  if (!setup._layoutFilled) {
+    layoutChoice = cfg.library_layout || "folder";
+    $("name_template").value = cfg.name_template || "";
+    $("write_nfo").checked = cfg.write_nfo === true || (cfg.write_nfo == null && layoutChoice === "media_server");
+    setup._layoutFilled = true;
+  }
+  $("layouts").replaceChildren(...LAYOUT_CHOICES.map(([key, label, , help]) => {
+    const radio = el("input", { type: "radio", name: "layout", value: key, checked: key === layoutChoice });
+    radio.addEventListener("change", () => {
+      layoutChoice = key;
+      $("write_nfo").checked = key === "media_server";
+      renderLayout();
+    });
+    return el("label", { class: "source" + (key === layoutChoice ? " selected" : "") },
+      radio, el("strong", { text: label }), el("small", { class: "muted", text: " " + help }));
+  }));
+  $("template-field").hidden = layoutChoice !== "custom";
+  $("name-preview").textContent = previewName(currentTemplate());
+}
+$("name_template").addEventListener("input", () => renderLayout());
+$("show").addEventListener("input", () => { if (setup) renderLayout(); });
+
+function collectLayout() {
+  const out = { library_layout: layoutChoice, write_nfo: $("write_nfo").checked };
+  if (layoutChoice === "custom") out.name_template = $("name_template").value.trim();
+  return out;
 }
 
 // ---- recording quality (record_quality.py holds the rules) ----
@@ -448,11 +508,12 @@ function collect() {
   for (const f of a ? a.fields : []) out[f.key] = $("field-" + f.key).value;
   out.output_dir = $("output_dir").value.trim();
   out.show = $("show").value.trim();
-  Object.assign(out, collectQuality());
+  Object.assign(out, collectQuality(), collectLayout());
   return out;
 }
 
 const STEP_OF = { chrome_exe: 1, obs_exe: 1, ffmpeg: 1, ffprobe: 1, adapter: 2, output_dir: 3, show: 3,
+  library_layout: 3, name_template: 3, write_nfo: 3,
   record_mode: 3, record_crf: 3, video_bitrate_kbps: 3, x264_preset: 3, keyframe_seconds: 3 };
 
 async function finish() {

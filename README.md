@@ -2,8 +2,9 @@
 
 An open-source browser DVR. Give it a queue of web pages that play video. It
 opens each one in your own Chrome, starts playback, records the screen with
-OBS until the video itself reports that it has ended, and files the result as
-a verified, compressed media library that Jellyfin or Emby can read.
+OBS until the video itself reports that it has ended, and files the result in
+a tidy local library: a plain numbered folder by default, a media-server layout
+(Jellyfin, Emby, Plex, Kodi) or your own naming template.
 
 License: GPL-3.0-or-later.
 
@@ -34,8 +35,11 @@ playcap is built for long, unattended runs:
   re-encodes to CRF 24 and only archives the original once the new file runs
   the full length. Files already recorded at that quality are skipped. AAC
   audio is copied, not re-encoded.
-- **Jellyfin/Emby filing.** Episodes are named `SxxEyy - Title` with `.nfo`
-  sidecars for the untruncated title, air date and description.
+- **Your naming, your layout.** Default: `My Recordings/03 - Title.mp4`.
+  Media-server layout: `Show/Season 01/S01E03 - Title.mp4` plus `.nfo` files
+  with the untruncated title and date. Or a template of your own, such as
+  `{show}/{date} - {title} ({n})`. Numbers follow the queue, so a re-recorded
+  item keeps its name.
 - **Simple local UI.** A setup wizard that finds Chrome, OBS and ffmpeg for
   you and configures OBS itself, then one screen to start/stop recording,
   watch progress (including a black-capture warning), retry or skip items and
@@ -113,7 +117,7 @@ Closing panel | https://example.org/talks/closing-panel
 | `python build_queue.py` | Ask the adapter for the queue and save it |
 | `python record_all.py [--dry-run] [--limit N] [--speed 2] [--only KIND]` | Record the queue |
 | `python optimize.py [--verify] [--only TEXT] [--crf 24]` | Verified in-place re-encode |
-| `python organize.py [--dry-run]` | Rename to `SxxEyy` and write `.nfo` files |
+| `python organize.py [--dry-run]` | Re-file finished recordings under the current naming layout (and `.nfo` files if on) |
 | `python status.py [--watch]` | Write `status.html` |
 | `python -m playcap ui` (or `playcap ui`, `python control.py`) | The UI on http://127.0.0.1:8765 |
 | `python -m playcap.tools.smoke_test URL` | Rehearse one page end to end |
@@ -180,7 +184,8 @@ recorder ── per item: page_target -> navigate -> check_page -> find_player
             -> CDP trusted click (start playback) -> rewind to 0 if resumed
             -> fullscreen player -> OBS StartRecord -> poll <video> every 10 s
                (stall nudge, re-attach, pause resume, time budget)
-            -> OBS StopRecord -> rename SxxEyy -> remux to faststart mp4 -> .nfo
+            -> OBS StopRecord -> file by the naming layout -> remux to faststart mp4
+            -> .nfo (media-server layout, or when switched on)
             -> progress.json (after every item)
                                        │
 optimize ── CRF re-encode to a sidecar -> verify duration -> archive original
@@ -221,6 +226,19 @@ camera pointed at your monitor would.
   Contributions that add these will not be accepted.
 
 The full statement is in [RESPONSIBLE_USE.md](RESPONSIBLE_USE.md).
+
+### Sites that block screen capture
+
+Some players use protected playback: the video shows on your screen but
+reaches screen capture as black. playcap notices this (the page was fine a
+moment before, then the recording stays black from the first frame), stops
+the item, does not retry it, and says so in the UI. It does not work around
+it: no flags, no settings changes, no other tricks. If a site blocks capture,
+playcap is the wrong tool for that site.
+
+A black recording can also mean OBS is capturing the wrong screen. Press
+*Set up recording scene*, or run the smoke test on one page
+(`python -m playcap.tools.smoke_test "<page-url>"`) to tell the two apart.
 
 ## License
 

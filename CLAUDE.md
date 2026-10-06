@@ -1,8 +1,9 @@
 # playcap (repo: video-recorder)
 
 An open-source browser DVR (GPL-3.0-or-later). It drives a real logged-in Chrome through
-CDP, captures the screen with OBS until the page's `<video>` ends, then re-encodes and files
-the results as a Jellyfin/Emby TV series. The core is generic. Everything site-specific
+CDP, captures the screen with OBS until the page's `<video>` ends, then files the results by a
+naming layout (plain folder by default; media-server series or a custom template as options).
+The core is generic. Everything site-specific
 goes through an adapter.
 
 Tests: `python -m pytest tests -q` (stdlib + pytest; no OBS/Chrome needed). Only the scripts are tracked: `.gitignore` excludes `local/`, `chrome-profile/`,

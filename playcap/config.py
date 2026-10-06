@@ -43,6 +43,9 @@ DEFAULTS = {
     "progress_file": "progress.json",
     "optimize_state": "optimize.json",
     # library filing (organize.py and the recorder's finalize step)
+    "library_layout": "folder",       # "folder", "media_server" or "custom"
+    "name_template": "",              # custom layout only, e.g. "{show}/{date} - {title} ({n})"
+    "write_nfo": None,                # None = only for media_server
     "show": "Recordings",
     "season": 1,
     "title_cleanup": [],              # regexes stripped from raw titles, in order
