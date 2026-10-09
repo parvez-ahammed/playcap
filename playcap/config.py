@@ -32,7 +32,7 @@ import os
 import sys
 from pathlib import Path
 
-from playcap import adapters, capture, cdp, detect, record_quality
+from playcap import adapters, capture, cdp, detect, notify, record_quality, schedule
 
 CONFIG_FILE = Path("config.json")
 CONFIG_ENV = "PLAYCAP_CONFIG"
@@ -66,6 +66,9 @@ DEFAULTS = {
     **record_quality.DEFAULTS,
     # which program records the screen: OBS or ffmpeg (capture.py explains)
     **capture.DEFAULTS,
+    # notifications, media-server refresh (notify.py) and the schedule (schedule.py)
+    **notify.DEFAULTS,
+    **schedule.DEFAULTS,
 }
 
 _cache = {}

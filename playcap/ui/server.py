@@ -13,6 +13,13 @@ rebinding), and every POST must carry the per-run token from the page
 (X-Playcap-Token), a JSON content type (a cross-site form cannot send one
 without a preflight) and, when present, a same-origin Origin header.
 
+Notifications & automation (GET /api/automation, POST /api/automation/save,
+/api/automation/test, /api/schedule/register, /api/schedule/unregister): the
+page gets notify.public_view -- has_<key> flags, never the webhook URLs or
+tokens -- and a save may touch only those keys. Saving a changed schedule
+while a Windows task is registered re-registers it (or removes it when the
+schedule is switched off), so the task never runs on a stale time.
+
 "Open folder" (POST /api/open/library) opens only the configured recordings
 folder; the request carries no path.
 
@@ -42,11 +49,12 @@ import sys
 import threading
 import time
 import webbrowser
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from playcap import detect, jobs, obs_setup, record_quality, recipes, settings, state, teach
+from playcap import detect, jobs, notify, obs_setup, record_quality, recipes, schedule, settings, state, teach
 from playcap import demo, firstrun, install
 
 HERE = Path(__file__).resolve().parent
@@ -146,7 +154,8 @@ def setup_info(root):
         shown, _ = state._effective(cfg)
     except Exception:
         shown = dict(cfg)
-    shown = {k: v for k, v in shown.items() if k != "obs_password" and not isinstance(v, list)}
+    shown = {k: v for k, v in shown.items() if k != "obs_password" and not isinstance(v, list)
+             and k not in notify.SECRET_KEYS}          # webhook URLs and tokens stay on disk
     shown["adapter"] = settings.effective_adapter(cfg)
     info = {
         "config": shown,
@@ -368,6 +377,47 @@ def recipe_action(root, path, body):
     return {"ok": False, "message": "Unknown action."}
 
 
+def automation_info(root):
+    raw = settings.read(root)
+    cfg = {**notify.DEFAULTS, **schedule.DEFAULTS, **raw}
+    view = notify.public_view(cfg)
+    view.update({k: cfg.get(k) for k in schedule.DEFAULTS})
+    nxt = schedule.next_run(cfg, datetime.now())
+    return {"settings": view, "events": list(notify.EVENTS),
+            "schedule": {"describe": schedule.describe(cfg),
+                         "next": nxt.strftime("%Y-%m-%d %H:%M") if nxt else None,
+                         "task": schedule.task_status(root)}}
+
+
+def automation_save(root, body):
+    allowed = settings.automation_keys()
+    extra = sorted(set(body) - allowed)
+    if extra:
+        return {"ok": False, "errors": {k: "Not an automation setting." for k in extra}}
+    before = settings.read(root)
+    cfg, errors = settings.save(root, body)
+    if errors:
+        return {"ok": False, "errors": errors}
+    out = {"ok": True, "message": "Saved."}
+    moved = any(before.get(k) != cfg.get(k) for k in schedule.DEFAULTS)
+    if moved and sys.platform.startswith("win") and schedule.task_status(root)["registered"]:
+        if cfg.get("schedule_mode", "off") == "off":
+            ok, msg = schedule.unregister(root)
+        else:
+            ok, msg = schedule.register(root, cfg)
+        out["message"] = "Saved. " + msg
+        out["ok"] = ok
+    return out
+
+
+def schedule_action(root, action):
+    if action == "register":
+        return schedule.register(root)
+    if action == "unregister":
+        return schedule.unregister(root)
+    return False, "Unknown schedule action."
+
+
 def browse(kind):
     try:
         out = subprocess.run([sys.executable, "-c", BROWSE_JS, kind],
@@ -468,6 +518,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, install.status(self.root))
             if path == "/api/recipes":
                 return self._send(200, {"recipes": recipes.load_all(self.root)})
+            if path == "/api/automation":
+                return self._send(200, automation_info(self.root))
             return self._send(404, {"ok": False, "message": "not found"})
         except Exception as exc:          # never let one bad file kill the page
             return self._send(500, {"ok": False, "message": f"{exc.__class__.__name__}: {exc}"})
@@ -498,6 +550,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": ok, "message": msg})
             if path == "/api/open/library":
                 ok, msg = open_library(self.root)
+                return self._send(200, {"ok": ok, "message": msg})
+            if path == "/api/automation/save":
+                return self._send(200, automation_save(self.root, body))
+            if path == "/api/automation/test":
+                ok, msg = notify.send_test({**notify.DEFAULTS, **settings.read(self.root)})
+                return self._send(200, {"ok": ok, "message": msg})
+            if path in ("/api/schedule/register", "/api/schedule/unregister"):
+                ok, msg = schedule_action(self.root, path.rsplit("/", 1)[1])
                 return self._send(200, {"ok": ok, "message": msg})
             if path == "/api/browse":
                 kind = "folder" if body.get("kind") == "folder" else "file"

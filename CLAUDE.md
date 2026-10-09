@@ -30,6 +30,8 @@ playcap/                 generic core. No site names anywhere in it.
   activity.py            each job's last run as one plain sentence, read from its log
   obs_setup.py           idempotent OBS scene/capture setup; enables OBS websocket while OBS is closed
   record_quality.py      recording encoder (CRF/CBR) presets; written into OBS's profile while OBS is closed
+  notify.py              optional ntfy/Discord/webhook/toast notifications + Jellyfin/Plex refresh; never raises into the recorder
+  schedule.py            `playcap schedule`: timed re-scan + record, Windows Task Scheduler (un)registration
   screen.py              aims OBS at the browser's monitor, pins the browser window on top (Windows)
   control.py             old entry point, now opens the UI
   tools/                 smoke_test, inspect_live (generic diagnostics). No network or

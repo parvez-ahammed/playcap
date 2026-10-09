@@ -1,4 +1,5 @@
 """python -m playcap ui  -- open the playcap control UI.
+   playcap schedule     -- scheduled re-scan + record (see playcap.schedule).
    playcap --version    -- print the installed version.
 
 The version comes from the installed distribution's metadata, so it matches
@@ -7,7 +8,8 @@ to playcap.__version__.
 """
 import sys
 
-USAGE = "usage: python -m playcap ui [--port N] [--no-browser] [--root DIR] | --version"
+USAGE = ("usage: python -m playcap ui [--port N] [--no-browser] [--root DIR] | --version\n"
+         "       python -m playcap schedule [--once|--next|--stop|--register|--unregister|--status]")
 
 
 def version():
@@ -31,6 +33,9 @@ def main():
     if not args or args[0] in ("ui", "control"):
         from playcap.ui.server import main as ui_main
         return ui_main(args[1:])
+    if args[0] == "schedule":
+        from playcap.schedule import main as schedule_main
+        sys.exit(schedule_main(args[1:]))
     sys.exit(USAGE)
 
 
