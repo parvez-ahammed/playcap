@@ -34,9 +34,13 @@ playcap/                 generic core. No site names anywhere in it.
   tools/                 smoke_test, inspect_live (generic diagnostics). No network or
                          DRM-API instrumentation in the public tree: it reads as intent
                          to circumvent (see RESPONSIBLE_USE.md).
+  demo/                  bundled demo page + video (package data) and the UI's "Try it now";
+                         runs the ordinary jobs with PLAYCAP_CONFIG -> <root>/playcap-demo/
+  install.py             winget installs for Chrome/OBS/ffmpeg from a fixed allowlist
+  firstrun.py            .playcap/first_run.json: UI first start -> first recording (local only)
 record_all.py build_queue.py optimize.py organize.py status.py control.py
                          thin root wrappers so the old commands still work
-examples/demo/           test-pattern page + queue + config. Try playcap with no real site.
+examples/demo/           test-pattern page + queue + config for a checkout (video lives in playcap/demo/).
 tests/                   pytest suite
 playcap.bat              double-click launcher for the UI (Windows)
 local/                   PRIVATE, GITIGNORED: the owner's site adapter and launchers

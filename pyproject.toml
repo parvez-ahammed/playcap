@@ -41,3 +41,4 @@ include = ["playcap*"]
 
 [tool.setuptools.package-data]
 "playcap.ui" = ["*.html", "*.js", "*.css"]
+"playcap.demo" = ["*.html", "*.mp4", "*.txt"]

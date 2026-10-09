@@ -20,14 +20,22 @@ that predates the key. Otherwise the generic html5_video adapter is used.
 
 The config is read lazily (on first call), not at import, so importing a
 module to inspect it -- or py_compile-ing it -- needs no config.json.
+
+The environment variable PLAYCAP_CONFIG, when set, names a different config
+file. The UI's "Try it now" demo (playcap.demo) uses it to run the ordinary
+browser and recorder jobs from the user's folder -- so stop flags, PID files
+and logs stay where the UI looks -- against a demo config whose queue,
+progress and recordings live in their own folder, apart from the real ones.
 """
 import json
+import os
 import sys
 from pathlib import Path
 
 from playcap import adapters, cdp, detect, record_quality
 
 CONFIG_FILE = Path("config.json")
+CONFIG_ENV = "PLAYCAP_CONFIG"
 GENERIC_ADAPTER = "playcap.adapters.html5_video"
 
 DEFAULTS = {
@@ -71,7 +79,7 @@ def default_adapter_path():
 
 def load(path=None):
     """Return (cfg, adapter). Cached per path for the life of the process."""
-    path = Path(path or CONFIG_FILE)
+    path = Path(path or os.environ.get(CONFIG_ENV) or CONFIG_FILE)
     key = str(path.resolve())
     if key in _cache:
         return _cache[key]

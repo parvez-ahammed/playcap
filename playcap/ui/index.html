@@ -20,6 +20,23 @@
 </div>
 
 <main>
+  <!-- ============ try it now (first run; playcap.demo) ============ -->
+  <section id="tryit" class="card tryit" hidden>
+    <h2>Try it now (30 s)</h2>
+    <p class="muted">See playcap work before setting anything up. It opens its browser, starts OBS, plays a
+      six-second test video that ships with playcap and saves the recording in its own demo folder.
+      Your own settings, queue and library are not touched.</p>
+    <ul id="tryit-needs" class="tryit-needs"></ul>
+    <div class="row wrap">
+      <button id="tryit-start" class="btn primary big">Try it now</button>
+      <button id="tryit-stop" class="btn danger" hidden>Stop</button>
+      <button id="tryit-open" class="btn" hidden>Open folder</button>
+    </div>
+    <p id="tryit-status" class="muted small" aria-live="polite"></p>
+    <p id="tryit-file" class="muted small path"></p>
+    <pre id="tryit-install-log" class="install-log" hidden></pre>
+  </section>
+
   <!-- ============ setup wizard ============ -->
   <section id="wizard" class="wizard" hidden>
     <ol class="stepper">
@@ -33,6 +50,7 @@
       <p class="muted">playcap needs these four free programs. It found what you see below; change a path
         only if it picked the wrong one.</p>
       <div id="tools" class="tools"></div>
+      <pre id="install-log" class="install-log" hidden></pre>
       <div class="obsbox">
         <div>
           <h3>OBS</h3>
