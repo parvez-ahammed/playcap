@@ -287,6 +287,8 @@ def test_stop_raises_once_if_ffmpeg_ended_unnoticed(tmp_path):
     procs[0].code = 1
     with pytest.raises(capture.CaptureError):     # never filed as a finished recording
         cap.stop()
+    # recorder's cleanup retries on this, so the short file can be discarded
+    assert cap.record_status()["outputActive"]
     assert cap.stop() == str(tmp_path / "out" / "d.mkv")
 
 

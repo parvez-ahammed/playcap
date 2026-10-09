@@ -658,7 +658,15 @@ def record_one(item, index, obs, speed, args):
                 # Never leave a recording running. A fragment of an item is
                 # worth nothing and only risks passing for the real thing, so
                 # bin it -- the item stays queued and gets recorded whole.
-                partial = obs.stop_record()
+                try:
+                    partial = obs.stop_record()
+                except ObsError:
+                    # ffmpeg that died on its own raises once on stop and
+                    # hands back the file on the next call; without the
+                    # retry its short .mkv would stay in the library.
+                    if not obs.record_status()["outputActive"]:
+                        raise
+                    partial = obs.stop_record()
                 time.sleep(3)
                 if partial and Path(partial).exists():
                     frag = Path(partial)
