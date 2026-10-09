@@ -24,6 +24,15 @@ turn them on. Show name, season, and the title clean-up come from config
 "title_max_len", "show_plot", "show_premiered") -- a site adapter usually
 supplies them as defaults.
 
+Moving never overwrites. A destination that is already taken (an earlier
+take, another item rendering to the same name) is reported and left alone;
+moves that free a name for another run first, so a renumbered queue still
+files cleanly. progress.json is saved after every move, so a crash mid-way
+loses nothing, and organize refuses to run during a recording: the recorder
+rewrites progress.json from memory after every item. Renaming a file that
+optimize.py made also moves its optimize.json entry and its archived
+original, so optimize never mistakes it for a new raw recording.
+
 Usage:  python -m playcap.organize --dry-run     # show the plan
         python -m playcap.organize               # move files (and write .nfo files)
 """
@@ -34,7 +43,8 @@ import shutil
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from playcap import config
+from playcap import config, jobs
+from playcap.settings import atomic_write_json
 
 LAYOUTS = {
     "folder": "{show}/{n:02} - {title}",
@@ -68,11 +78,37 @@ def fields(cfg, index, item, title):
             "kind": getattr(item, "kind", "") or "", "id": getattr(item, "id", "") or ""}
 
 
+RESERVED = re.compile(r"^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$", re.I)
+PART_MAX = 120          # per folder/file name; keeps whole paths well under 260
+
+
+def _value(v):
+    """A field value is text inside one name: a "/" in a title must not make
+    a folder, and control characters have no place in a file name."""
+    if not isinstance(v, str):
+        return v
+    return re.sub(r"[\x00-\x1f\x7f]", " ", v).replace("/", "-").replace("\\", "-")
+
+
+def _part(part):
+    part = safe(part)
+    while True:            # strip dangling separators and Windows-illegal trailing dots
+        new = re.sub(r"^[\s\-_.,]+|[\s\-_,.]+$", "", part)
+        if new == part:
+            break
+        part = new
+    if len(part) > PART_MAX:
+        part = part[:PART_MAX].rstrip(" .-_,")
+    if RESERVED.match(part):
+        part += "_"
+    return part
+
+
 def _render(template, values):
-    out = template.format(**values)
+    out = template.format(**{k: _value(v) for k, v in values.items()})
     parts = []
     for part in re.split(r"[\\/]", out):
-        part = re.sub(r"^[\s\-_.,]+|[\s\-_,]+$", "", safe(part))
+        part = _part(part)
         if part and part not in (".", ".."):
             parts.append(part)
     if not parts:
@@ -164,7 +200,7 @@ def clean_title(raw, cfg):
 
 
 def safe(name):
-    return re.sub(r'[<>:"/\|?*]', "-", name).rstrip(". ")
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", name).rstrip(". ")
 
 
 def aired(item):
@@ -194,16 +230,83 @@ def show_nfo(cfg):
             + "\n".join(rows) + "\n</tvshow>\n")
 
 
+def _same_file(a, b):
+    try:
+        return a.resolve() == b.resolve() or (b.exists() and a.samefile(b))
+    except OSError:
+        return False
+
+
+def _find(src, outdir):
+    """Where a recording is now: its recorded path, the same name in the
+    library (it moved drives), or either as the .mp4 optimize made of it."""
+    for p in (src, outdir / src.name):
+        for cand in (p, p.with_suffix(".mp4")):
+            if cand.exists():
+                return cand
+    return None
+
+
+def _follow_optimize(cfg, src, dst):
+    """optimize.py tracks its outputs and archived originals by path. When a
+    file it made is renamed here, take its entry and its original along --
+    otherwise the renamed output looks like a new raw recording and the
+    original at the old name gets encoded into a duplicate episode."""
+    path = Path(cfg.get("optimize_state") or "optimize.json")
+    if not path.exists():
+        return
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"     (optimize.json unreadable, not updated: {exc})")
+        return
+    lib = Path(cfg["output_dir"]).resolve()
+    archive = lib.parent / (lib.name + "_originals")
+    old, new = src.resolve(), dst.resolve()
+    try:
+        new_rel = new.relative_to(lib)
+    except ValueError:
+        return
+    changed = False
+    for key, entry in list(state.items()):
+        if not isinstance(entry, dict) or not entry.get("file") \
+                or Path(entry["file"]).resolve() != old:
+            continue
+        entry["file"] = str(dst)
+        orig = Path(entry["original"]) if entry.get("original") else None
+        if orig and orig.exists():
+            target = archive / new_rel.with_suffix(orig.suffix)
+            if target.exists():
+                print(f"     archived original left at {orig}: {target} exists")
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(orig), str(target))
+                entry["original"] = str(target)
+        state.pop(key)
+        state[new_rel.with_suffix("").as_posix()] = entry
+        changed = True
+    if changed:
+        atomic_write_json(path, state)
+
+
+def recording_now():
+    root = Path.cwd()
+    return jobs.status(root)["record"]["running"] or bool(jobs.external(max_age=0).get("record"))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
     cfg, adapter = config.load()
+    if not args.dry_run and recording_now():
+        raise SystemExit("A recording is running. Organize when it has finished: "
+                         "the recorder rewrites progress.json after every item.")
     outdir = Path(cfg["output_dir"])
     progress_path = Path(cfg["progress_file"])
-    raws = json.loads(Path(cfg["queue_file"]).read_text())
-    progress = json.loads(progress_path.read_text())
+    raws = json.loads(Path(cfg["queue_file"]).read_text(encoding="utf-8"))
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
     items = [adapter.item(r) for r in raws]
     by_id = {it.id: (pos, it) for pos, it in enumerate(items, 1)}
 
@@ -212,13 +315,11 @@ def main(argv=None):
         if rec.get("status") != "done" or sid not in by_id:
             continue
         ep, item = by_id[sid]
-        src = Path(rec["file"])
-        if not src.exists():               # the recording moved drives
-            alt = outdir / src.name
-            if not alt.exists():
-                print(f"  MISSING {src}")
-                continue
-            src = alt
+        found = _find(Path(rec["file"]), outdir)
+        if not found:
+            print(f"  MISSING {rec['file']}")
+            continue
+        src = found
         title = clean_title(item.title, cfg)
         dst = outdir / (str(relpath(cfg, ep, item, title)) + src.suffix)
         moves.append((src, dst, item, ep, title))
@@ -245,27 +346,62 @@ def main(argv=None):
         show_root(cfg).mkdir(parents=True, exist_ok=True)
         (show_root(cfg) / "tvshow.nfo").write_text(show_nfo(cfg), encoding="utf-8")
 
-    progress_changed = False
-    for src, dst, item, ep, title in moves:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if src.resolve() != dst.resolve():
-            shutil.move(str(src), str(dst))
-        if nfo:
-            dst.with_suffix(".nfo").write_text(episode_nfo(item, ep, title, cfg),
-                                               encoding="utf-8")
-        progress[item.id]["file"] = str(dst)
-        progress_changed = True
-        print(f"  #{ep:02d} {dst.relative_to(outdir)}")
+    # Two items rendering to one name: file the first, report the rest.
+    claimed, pending, conflicts = set(), [], []
+    for m in moves:
+        key = str(m[1]).lower()
+        if key in claimed:
+            conflicts.append((m, "another item files to the same name"))
+        else:
+            claimed.add(key)
+            pending.append(m)
+
+    filed = 0
+    while pending:
+        progressed, waiting = False, []
+        for m in pending:
+            src, dst, item, ep, title = m
+            if dst.exists() and not _same_file(src, dst):
+                waiting.append(m)           # a later move may free the name
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if not _same_file(src, dst):
+                shutil.move(str(src), str(dst))
+                old_nfo = src.with_suffix(".nfo")
+                if old_nfo.exists() and not dst.with_suffix(".nfo").exists():
+                    shutil.move(str(old_nfo), str(dst.with_suffix(".nfo")))
+                _follow_optimize(cfg, src, dst)
+            if nfo:
+                dst.with_suffix(".nfo").write_text(episode_nfo(item, ep, title, cfg),
+                                                   encoding="utf-8")
+            if progress[item.id].get("file") != str(dst):
+                progress[item.id]["file"] = str(dst)
+                atomic_write_json(progress_path, progress)
+            filed += 1
+            progressed = True
+            print(f"  #{ep:02d} {dst.relative_to(outdir)}")
+        pending = waiting
+        if not progressed:
+            conflicts += [(m, "a different file already has this name") for m in pending]
+            break
+
+    for (src, dst, item, ep, title), why in conflicts:
+        print(f"  !! #{ep:02d} not moved, {why}: {dst}")
+        print(f"     still at {src}")
 
     if strays:
         partial_dir(cfg).mkdir(exist_ok=True)
         for p in strays:
-            shutil.move(str(p), str(partial_dir(cfg) / p.name))
+            target = partial_dir(cfg) / p.name
+            if target.exists():
+                print(f"  !! partial {p.name} not moved: {target} exists")
+                continue
+            shutil.move(str(p), str(target))
 
-    if progress_changed:
-        progress_path.write_text(json.dumps(progress, indent=1))
-    print(f"\n{len(moves)} recordings filed under {outdir} ({layout(cfg)} layout)")
+    print(f"\n{filed} recordings filed under {outdir} ({layout(cfg)} layout)")
     print(f"{len(strays)} partials -> {partial_dir(cfg)}")
+    if conflicts:
+        print(f"{len(conflicts)} left in place: rename or remove the files above, then rerun")
 
 
 if __name__ == "__main__":

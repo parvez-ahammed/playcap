@@ -19,11 +19,14 @@ Keep site-specific adapters in your own module, or in the gitignored
 
 ## Before you change the recorder
 
+- Install from the repo root with `pip install -e .`, so `python -m playcap...`
+  works from any folder.
 - Rehearse against the demo: `cd examples/demo`, then
-  `python ../../build_queue.py` and `python ../../record_all.py --dry-run`.
+  `python -m playcap.build_queue` and `python -m playcap.recorder --dry-run`.
   For a real capture, use `python -m playcap.tools.smoke_test <url>`, which
   checks that the captured frame is not black.
-- Run `python -m py_compile` on every file you touch.
+- Run `python -m py_compile` on every file you touch, and the tests:
+  `python -m pytest tests -q`.
 - Every stage must stay resumable. A crash or Ctrl+C may cost at most the
   item in flight, and a rerun must skip finished work.
 - Never let a code path delete a source recording before its replacement has

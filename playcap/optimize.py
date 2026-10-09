@@ -48,6 +48,15 @@ Audio that is already AAC is stream-copied, not re-encoded: the old
 twice, deterministically, at the same timestamp, from a source that decoded
 clean both times. Copying costs ~3% size and is bit-exact.
 
+Nothing is ever overwritten. A library file is a source only if progress.json
+lists it as a recording (so pointing output_dir at a folder of personal videos
+re-encodes none of them); an existing destination that is not one of our own
+outputs fails the item instead of being replaced; and an archive slot that is
+already taken fails it too, so a true original is never lost to a second
+generation. optimize.json is keyed by the path relative to the library
+(two shows may both have "01 - Intro"), and a rerun merges into an entry
+instead of dropping what it recorded before.
+
 Binaries come from config: "encode_ffmpeg" (falls back to "ffmpeg") and
 "ffprobe".
 
@@ -94,9 +103,45 @@ def _setup():
         CFG, _ = config.load()
         FFMPEG = CFG.get("encode_ffmpeg") or CFG["ffmpeg"]
         FFPROBE = CFG["ffprobe"]
-        LIB = Path(CFG["output_dir"])
+        LIB = Path(CFG["output_dir"]).resolve()
+        if LIB.parent == LIB:
+            sys.exit(f"output_dir is a drive root ({LIB}); the archive of originals "
+                     "would land inside the library. Use a folder.")
         ARCHIVE = LIB.parent / (LIB.name + "_originals")
         STATE = Path(CFG["optimize_state"])
+
+
+class Refused(RuntimeError):
+    """Doing this would overwrite a file that is not ours to replace."""
+
+
+def recordings():
+    """Library files progress.json says playcap recorded: full paths and,
+    for recordings whose drive letter or folder changed, bare names."""
+    _setup()
+    try:
+        prog = json.loads(Path(CFG.get("progress_file", "progress.json"))
+                          .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        prog = {}
+    paths, names = set(), set()
+    for v in prog.values() if isinstance(prog, dict) else ():
+        if isinstance(v, dict) and v.get("status") == "done" and v.get("file"):
+            f = Path(v["file"])
+            paths.add(str(f.resolve()).lower())
+            names.add(f.with_suffix("").name.lower())
+    return paths, names
+
+
+def is_recording(p, known):
+    paths, names = known
+    return str(p.resolve()).lower() in paths or p.with_suffix("").name.lower() in names
+
+
+def state_key(src):
+    """optimize.json key: the path relative to the library (or archive)."""
+    root = ARCHIVE if ARCHIVE in src.parents else LIB
+    return src.relative_to(root).with_suffix("").as_posix()
 
 
 def probe(path, entries, stream=None):
@@ -126,11 +171,13 @@ def sources(state):
     written."""
     _setup()
     done = finished(state)
+    known = recordings()
     fresh = time.time() - FRESH_MINUTES * 60
     live = [p for p in LIB.rglob("*.mkv") if "_partial" not in p.parts
-            and not is_unfiled(p)]
+            and not is_unfiled(p) and is_recording(p, known)]
     live += [p for p in LIB.rglob("*.mp4") if "_partial" not in p.parts
-             and not is_unfiled(p) and p not in done and p.stat().st_mtime < fresh]
+             and not is_unfiled(p) and p not in done and is_recording(p, known)
+             and p.stat().st_mtime < fresh]
     archived = ([p for ext in ("*.mkv", "*.mp4") for p in ARCHIVE.rglob(ext)]
                 if ARCHIVE.exists() else [])
     return sorted(live + archived, key=lambda p: p.name)
@@ -240,6 +287,8 @@ def archive(src):
     """Move the original out of the library. The .nfo stays behind: its
     basename already matches the new .mp4, which is what a media server reads."""
     dest = in_archive(src)
+    if dest.exists():
+        raise Refused(f"{dest} is already in the archive; not replacing an original")
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dest))
     return dest
@@ -255,6 +304,7 @@ def save_state(state):
 
 def main(argv=None):
     jobs.graceful_signals()
+    jobs.clear_stale_flags(Path.cwd(), "optimize")
     try:
         _run(argv)
     except KeyboardInterrupt:
@@ -275,7 +325,7 @@ def _run(argv=None):
                     help="do not move originals to the archive")
     args = ap.parse_args(argv)
 
-    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    state = json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else {}
     stray = loose()
     if stray:
         print(f"skipping {len(stray)} unfiled video(s) in {LIB} "
@@ -303,33 +353,46 @@ def _run(argv=None):
             print(f"    recorded at CRF {rec_crf:g} already -- nothing to gain, skipped")
             continue
 
+        key = state_key(src)
+        entry = {**(state.pop(src.name, None) or {}), **state.get(key, {})}
+
+        def failed(why):
+            print(f"    !! {why}")
+            state[key] = {**entry, "status": "failed", "error": str(why)}
+            save_state(state)
+
         in_place = src == dst
         ok, why = (False, "raw recording") if in_place else verify(src, dst)
+        encoded = not ok
         if not ok and args.verify:
             print(f"    not optimized: {why}")
             continue
         if not ok:
+            if not in_place and dst.exists() and dst not in finished(state):
+                failed(f"{dst.name} exists and is not an optimize output; "
+                       "not replacing it (rename one of them, then rerun)")
+                continue
             print(f"    encoding at crf {args.crf} ...")
             try:
                 took, tmp = encode(src, dst, args.crf, args.preset)
-            except RuntimeError as exc:
-                print(f"    !! {exc}")
-                state[src.name] = {"status": "failed", "error": str(exc)}
-                save_state(state)
+            except (RuntimeError, OSError) as exc:
+                failed(exc)
                 continue
             ok, why = verify(src, tmp)
             print(f"    encoded in {took / 60:.1f} min")
             if not ok:
                 tmp.unlink(missing_ok=True)
-                print(f"    !! not usable, original untouched: {why}")
-                state[src.name] = {"status": "failed", "error": why}
-                save_state(state)
+                failed(f"not usable, original untouched: {why}")
                 continue
-            if in_place:
-                # Same name: the source must leave before the encode moves in.
-                archived = archive(src)
-                src = archived
-            tmp.replace(dst)
+            try:
+                if in_place:
+                    # Same name: the source must leave before the encode moves in.
+                    src = archive(src)
+                tmp.replace(dst)
+            except (Refused, OSError) as exc:
+                tmp.unlink(missing_ok=True)
+                failed(exc)
+                continue
 
         new_gb = gb(dst)
         before_total += source_gb
@@ -337,15 +400,20 @@ def _run(argv=None):
         print(f"    {source_gb:.2f} GB -> {new_gb:.2f} GB "
               f"({source_gb / new_gb:.1f}x smaller, {why})")
 
-        state[src.name] = {"status": "done", "file": str(dst),
-                           "gb": round(new_gb, 2), "crf": args.crf}
+        new = {"status": "done", "file": str(dst), "gb": round(new_gb, 2)}
+        if encoded or "crf" not in entry:
+            new["crf"] = args.crf               # only an encode sets the CRF
+        state[key] = {k: v for k, v in {**entry, **new}.items() if k != "error"}
 
         if ARCHIVE in src.parents and in_place:
-            state[src.name]["original"] = str(src)
+            state[key]["original"] = str(src)
             print("    original archived")
         elif not args.keep and ARCHIVE not in src.parents:
-            state[src.name]["original"] = str(archive(src))
-            print("    original archived")
+            try:
+                state[key]["original"] = str(archive(src))
+                print("    original archived")
+            except (Refused, OSError) as exc:
+                print(f"    original left in place: {exc}")
         save_state(state)
 
     if before_total:

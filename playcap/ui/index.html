@@ -14,18 +14,24 @@
   <button id="settings-btn" class="btn ghost" hidden>Settings</button>
 </header>
 
+<div id="banner" class="banner" role="alert" hidden>
+  <span id="banner-text"></span>
+  <button id="banner-reload" class="btn small" hidden>Reload page</button>
+</div>
+
 <main>
   <!-- ============ setup wizard ============ -->
   <section id="wizard" class="wizard" hidden>
     <ol class="stepper">
-      <li data-step="1">Tools</li>
-      <li data-step="2">What to record</li>
-      <li data-step="3">Library</li>
+      <li data-step="1" tabindex="0" role="button">Tools</li>
+      <li data-step="2" tabindex="0" role="button">What to record</li>
+      <li data-step="3" tabindex="0" role="button">Library</li>
     </ol>
 
     <div class="card step" data-step="1">
       <h2>Tools</h2>
-      <p class="muted">playcap found these on your computer. Change a path only if it picked the wrong one.</p>
+      <p class="muted">playcap needs these four free programs. It found what you see below; change a path
+        only if it picked the wrong one.</p>
       <div id="tools" class="tools"></div>
       <div class="obsbox">
         <div>
@@ -51,8 +57,9 @@
         <span>Save recordings in</span>
         <div class="row">
           <input id="output_dir" type="text" spellcheck="false">
-          <button class="btn" data-browse="output_dir" data-kind="folder">Browse…</button>
+          <button class="btn" data-browse="output_dir" data-kind="folder" aria-label="Browse for the recordings folder">Browse…</button>
         </div>
+        <small id="output-full" class="muted"></small>
         <small class="err" data-err="output_dir"></small>
       </label>
       <label class="field">
@@ -109,6 +116,12 @@
   <section id="dash" hidden>
     <ul id="problems" class="problems"></ul>
 
+    <div id="start" class="card start" hidden>
+      <h3>Getting started</h3>
+      <p class="muted small">Four steps to your first recording. Each one ticks itself off.</p>
+      <ol id="start-steps" class="steps"></ol>
+    </div>
+
     <div class="card controls">
       <div class="group">
         <h3>Recording</h3>
@@ -119,15 +132,6 @@
           <button id="rec-kill" class="btn danger" hidden>Force stop</button>
         </div>
         <p id="rec-note" class="muted small"></p>
-      </div>
-      <div class="group">
-        <h3>Library</h3>
-        <div class="row wrap">
-          <button id="opt-start" class="btn big">Re-compress library</button>
-          <button id="opt-stop" class="btn danger" hidden>Stop re-compressing</button>
-          <button id="opt-kill" class="btn danger" hidden>Force stop</button>
-        </div>
-        <p id="opt-note" class="muted small">Optional. Only helps recordings made at a fixed bitrate (about 1.3x smaller); files recorded in a quality mode are skipped. Originals are kept until each new file is checked.</p>
       </div>
       <div class="group">
         <h3>Browser &amp; queue</h3>
@@ -152,6 +156,11 @@
       <div id="encode-meta" class="muted"></div>
     </div>
 
+    <div id="activity-card" class="card" hidden>
+      <h3>What happened</h3>
+      <ul id="activity" class="activity"></ul>
+    </div>
+
     <div class="card">
       <div class="card-head">
         <h3>Queue</h3>
@@ -165,17 +174,35 @@
     </div>
 
     <div class="card">
-      <div class="card-head"><h3>Library</h3><span id="lib-summary" class="muted"></span></div>
+      <div class="card-head">
+        <h3>Library</h3>
+        <div class="row"><span id="lib-summary" class="muted"></span>
+          <button id="lib-open" class="btn small">Open folder</button></div>
+      </div>
+      <p id="lib-path" class="muted small path"></p>
       <table class="list">
-        <thead><tr><th>Episode</th><th class="num">Size</th><th>Shrunk</th></tr></thead>
+        <thead><tr><th>Recording</th><th class="num">Size</th><th>Shrunk</th></tr></thead>
         <tbody id="lib-body"></tbody>
       </table>
+      <p id="lib-empty" class="muted" hidden>Finished recordings show up here.</p>
+      <div id="lib-opt" class="lib-opt" hidden>
+        <div class="row wrap">
+          <button id="opt-start" class="btn small">Re-compress library</button>
+          <button id="opt-stop" class="btn small danger" hidden>Stop re-compressing</button>
+          <button id="opt-kill" class="btn small danger" hidden>Force stop</button>
+        </div>
+        <p id="opt-note" class="muted small"></p>
+      </div>
     </div>
 
-    <details class="card logs">
-      <summary>Logs</summary>
-      <div id="logs"></div>
-    </details>
+    <!-- Always reachable, even before any job has run: the raw logs are the
+         first thing to look at when "What happened" has nothing to say. -->
+    <div class="card">
+      <details class="logs">
+        <summary>Raw logs</summary>
+        <div id="logs"></div>
+      </details>
+    </div>
   </section>
 </main>
 

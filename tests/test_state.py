@@ -138,3 +138,25 @@ def test_locked_beats_failed_like_the_recorder(tmp_path):
     write(tmp_path / "queue.json", [{"id": "x", "url": "https://x/x", "title": "X", "locked": True}])
     write(tmp_path / "progress.json", {"x": {"status": "failed", "title": "X", "error": "e"}})
     assert state.snapshot(tmp_path)["items"][0]["state"] == "locked"
+
+
+def test_closed_obs_is_info_not_alarm(tmp_path):
+    # The recorder starts OBS itself, so "closed" must not read as a blocker.
+    configure(tmp_path, tmp_path / "out")
+    obs = next(p for p in state.snapshot(tmp_path)["problems"] if p["code"] == "obs")
+    assert obs["level"] == "info" and "starts it" in obs["text"]
+
+
+def test_obs_password_error_stays_a_problem(tmp_path, monkeypatch):
+    configure(tmp_path, tmp_path / "out")
+    monkeypatch.setattr(state, "check_obs", lambda url, pw: (False, "OBS refused the password"))
+    obs = next(p for p in state.snapshot(tmp_path)["problems"] if p["code"] == "obs")
+    assert "level" not in obs and obs["text"] == "OBS refused the password"
+
+
+def test_snapshot_tells_the_ui_what_it_needs(tmp_path):
+    configure(tmp_path, "rec", avg_item_minutes=30)
+    snap = state.snapshot(tmp_path)
+    assert snap["queue_offline"] is True               # a list of links needs no browser
+    assert snap["avg_item_minutes"] == 30
+    assert snap["library_dir"] == str(tmp_path / "rec")  # relative to the playcap folder

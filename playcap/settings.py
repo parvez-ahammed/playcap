@@ -29,6 +29,7 @@ written to queue.txt next to config.json and queue_source points at it.
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from playcap import adapters, record_quality
@@ -36,6 +37,7 @@ from playcap import adapters, record_quality
 CONFIG_NAME = "config.json"
 LINKS_FILE = "queue.txt"
 GENERIC = "playcap.adapters.html5_video"
+REPLACE_TRIES = 20          # x 0.25 s: how long a save waits out a brief Windows file lock
 TOOL_KEYS = ("chrome_exe", "obs_exe", "ffmpeg", "ffprobe", "encode_ffmpeg")
 
 
@@ -49,7 +51,17 @@ def atomic_write_text(path, text):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
-        os.replace(tmp, path)
+        # Windows refuses the replace while anyone has the target open (the
+        # UI polling it, an indexer, antivirus). Those holds last moments, and
+        # failing here would lose the progress of an item that just finished.
+        for attempt in range(REPLACE_TRIES):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == REPLACE_TRIES - 1:
+                    raise
+                time.sleep(0.25)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
@@ -61,6 +73,26 @@ def read(root):
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+class Unreadable(Exception):
+    """A file exists but cannot be read as the JSON object it should hold."""
+
+
+def read_strict(path, default):
+    """For read-modify-write: the default only when the file is missing.
+    A corrupt or locked file raises, so a save never replaces a file it could
+    not read with a fresh one holding only the new keys."""
+    path = Path(path)
+    if not path.exists():
+        return default
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise Unreadable(f"{path.name} cannot be read ({exc}); fix or move it first") from exc
+    if not isinstance(data, type(default)):
+        raise Unreadable(f"{path.name} does not hold a JSON {type(default).__name__}")
+    return data
 
 
 def is_configured(cfg):
@@ -109,6 +141,16 @@ def read_links(root, cfg):
         return ""
 
 
+def _link_ok(line, root):
+    """A web address, a file:// URL, or a file that exists next to the list.
+    "www.site.com/talk" without a scheme would otherwise turn into a local path
+    and fail much later with a confusing error."""
+    if "://" in line:
+        return line.split("://", 1)[0].lower() in ("http", "https", "file")
+    p = Path(line)
+    return (p if p.is_absolute() else Path(root) / p).is_file()
+
+
 def _tool_ok(value):
     if Path(value).is_file():
         return True
@@ -117,11 +159,19 @@ def _tool_ok(value):
 
 
 def _writable_dir(path):
+    """Can this folder be created and written? Checked on the nearest folder
+    that exists, so a save that is then refused leaves nothing behind."""
+    path = Path(path).resolve()
+    while not path.exists():
+        if path.parent == path:
+            return False
+        path = path.parent
+    if not path.is_dir():
+        return False
     try:
-        path.mkdir(parents=True, exist_ok=True)
-        probe = path / ".playcap-write-test"
-        probe.write_text("")
-        probe.unlink()
+        fd, probe = tempfile.mkstemp(dir=path, prefix=".playcap-write-test")
+        os.close(fd)
+        os.unlink(probe)
         return True
     except OSError:
         return False
@@ -148,8 +198,24 @@ def validate(partial, root):
     if "adapter" in partial:
         if partial["adapter"] not in {a["module"] for a in adapters_available()}:
             errors["adapter"] = "Unknown source."
-    if "links" in partial and not _clean_links(partial["links"]):
-        errors["links"] = "Add at least one page URL."
+    if "links" in partial:
+        links = _clean_links(partial["links"])
+        if not links:
+            errors["links"] = "Add at least one page URL."
+        bad = [ln for ln in links if not _link_ok(ln.rsplit(" | ", 1)[-1].strip(), root)]
+        if bad:
+            errors["links"] = (f"Not a web address or a file here: {bad[0]} "
+                               "(web pages start with https://)")
+    for key, lo, hi in (("season", 0, 9999), ("title_max_len", 0, 240),
+                        ("avg_item_minutes", 1, 24 * 60),
+                        ("chrome_debug_port", 1024, 65535)):
+        if key in partial:
+            try:
+                ok = lo <= int(partial[key]) <= hi and not isinstance(partial[key], bool)
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                errors[key] = f"A whole number from {lo} to {hi}."
     errors.update(record_quality.validate(partial))
     errors.update(_validate_layout(partial))
     return errors
@@ -175,11 +241,36 @@ def _validate_layout(partial):
     return errors
 
 
+# Keys the UI may write. Anything else in a request is refused, so the page
+# cannot point the pipeline's files somewhere else (queue_source, progress_file
+# and friends are set by playcap itself, relative to the folder).
+UI_KEYS = {"adapter", "links", "show", "output_dir", "obs_ws_url", "obs_password",
+           "chrome_debug_port", "library_layout", "name_template", "write_nfo",
+           "season", "title_max_len", "avg_item_minutes", *TOOL_KEYS,
+           *record_quality.DEFAULTS}
+
+
+def _adapter_keys(partial, current):
+    try:
+        a = adapters.load(partial.get("adapter") or effective_adapter(current))
+    except Exception:
+        return set()
+    return {f.get("key") for f in a.setup_fields if isinstance(f, dict)}
+
+
 def save(root, partial):
     root = Path(root)
     partial = dict(partial)
+    try:
+        current = read_strict(root / CONFIG_NAME, {})
+    except Unreadable as exc:
+        return read(root), {"_file": str(exc)}
+    unknown = set(partial) - UI_KEYS - _adapter_keys(partial, current)
+    if unknown:
+        return current, {k: "Not a setting the UI can change." for k in sorted(unknown)}
     errors = validate(partial, root)
-    current = read(root)
+    if "name_template" not in partial and partial.get("library_layout") == "custom"             and current.get("name_template"):
+        errors.pop("name_template", None)      # keeps the template it already has
     if errors:
         return current, errors
     links = partial.pop("links", None)
@@ -189,9 +280,16 @@ def save(root, partial):
     for key in TOOL_KEYS:
         if key in partial and not str(partial[key] or "").strip():
             partial.pop(key)                    # blank = keep auto-detection
-    for key in ("record_crf", "video_bitrate_kbps", "keyframe_seconds"):
+    for key in ("record_crf", "video_bitrate_kbps", "keyframe_seconds", "season",
+                "title_max_len", "avg_item_minutes", "chrome_debug_port"):
         if key in partial:
             partial[key] = int(partial[key])
     merged = {**current, **partial}
+    if partial.get("output_dir"):        # every check passed: now make the folder
+        out = Path(str(partial["output_dir"]).strip())
+        try:
+            (out if out.is_absolute() else root / out).mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return current, {"output_dir": f"Cannot create {out}: {exc}"}
     atomic_write_json(root / CONFIG_NAME, merged)
     return merged, {}

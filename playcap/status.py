@@ -39,7 +39,7 @@ def _setup():
 
 def read_json(path, default):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return default
 
@@ -97,19 +97,12 @@ def gather():
             pending.append(it)
             aired += 1
 
-    # Optimization: trust the disk, not the state file.
-    episodes = []
-    for mp4 in sorted(LIB.rglob("*.mp4")):
-        episodes.append({"name": mp4.stem, "state": "optimized",
-                         "gb": mp4.stat().st_size / 1024 ** 3})
-    for mkv in sorted(LIB.rglob("*.mkv")):
-        if "_partial" in mkv.parts:
-            continue
-        episodes.append({"name": mkv.stem, "state": "original",
-                         "gb": mkv.stat().st_size / 1024 ** 3})
-    for ep in episodes:
-        src = ARCHIVE.rglob(ep["name"] + ".mkv")
-        ep["before"] = next((p.stat().st_size / 1024 ** 3 for p in src), None)
+    # The same library scan as the UI (playcap.state): "optimized" means
+    # optimize.json lists the file as its own output -- a recorder .mp4 is not.
+    from playcap import state as ui_state         # deferred: state imports this module
+    episodes = [{"name": e["name"], "gb": e["gb"], "before": e["before_gb"],
+                 "state": "optimized" if e["optimized"] else "original"}
+                for e in ui_state._library(HERE, CFG)]
     episodes.sort(key=lambda e: e["name"])
 
     archive_gb = sum(p.stat().st_size for p in ARCHIVE.rglob("*.mkv")) / 1024 ** 3 \

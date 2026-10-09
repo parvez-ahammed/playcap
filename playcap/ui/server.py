@@ -13,6 +13,9 @@ rebinding), and every POST must carry the per-run token from the page
 (X-Playcap-Token), a JSON content type (a cross-site form cannot send one
 without a preflight) and, when present, a same-origin Origin header.
 
+"Open folder" (POST /api/open/library) opens only the configured recordings
+folder; the request carries no path.
+
 Queue edits (retry / skip) are refused while recording: the recorder holds
 the progress file in memory and rewrites it after every item, so an edit made
 underneath it would be silently lost.
@@ -51,7 +54,7 @@ print(path or "")
 
 
 def recording_now(root):
-    return jobs.status(root)["record"]["running"] or bool(jobs.external().get("record"))
+    return jobs.status(root)["record"]["running"] or bool(jobs.external(max_age=0).get("record"))
 
 
 def _progress_path(root):
@@ -91,7 +94,12 @@ def edit_item(root, action, item_id):
     if item_id not in titles:
         return False, "No such item in the queue."
     path = _progress_path(root)
-    progress = state._read_json(path, {})
+    try:
+        # Strict: a progress file that cannot be read must never be replaced
+        # by one holding only this edit -- that would forget every done item.
+        progress = settings.read_strict(path, {})
+    except settings.Unreadable as exc:
+        return False, str(exc)
     entry = progress.get(item_id) or {}
     if action == "skip":
         progress[item_id] = {"status": "skipped", "title": titles[item_id],
@@ -168,6 +176,8 @@ def obs_action(root, action):
             enabled_now = obs_setup.enable_websocket()
         # OBS reads its recording encoder only at start, so apply the chosen
         # quality now, while it is still closed (see record_quality).
+        if cfg.get("output_dir"):        # absolute: OBS runs from its own folder
+            cfg = {**cfg, "output_dir": str(Path(root) / cfg["output_dir"])}
         try:
             quality_now, _ = record_quality.apply(cfg, os.environ, sys.platform, obs_running=False)
         except Exception:
@@ -234,7 +244,9 @@ def job_action(root, action, name, mode="now", item=None):
         except Exception as exc:
             return False, f"The selected source cannot be loaded: {exc}"
         st = jobs.status(root)
-        if name == "test" and (st["record"]["running"] or st["optimize"]["running"]):
+        ext = jobs.external(max_age=0) if name in ("test", "record") else {}
+        if name == "test" and (st["record"]["running"] or st["optimize"]["running"]
+                               or ext.get("record") or ext.get("optimize")):
             return False, "Stop recording and re-compressing first; the test uses OBS and the browser."
         if name == "record" and st["test"]["running"]:
             return False, "A 25 s test is running; start recording when it finishes."
@@ -280,6 +292,27 @@ def _stop_obs_recording(root):
         return "could not reach OBS to stop its recording -- check OBS"
 
 
+def open_library(root):
+    """Show the recordings folder in the file manager. The path comes from
+    config only -- never from the request -- so the page cannot open anything else."""
+    raw = settings.read(root)
+    try:
+        cfg, _ = state._effective(raw)
+    except Exception as exc:
+        return False, f"The selected source cannot be loaded: {exc}"
+    lib = state.library_dir(root, cfg)
+    if not lib.is_dir():
+        return False, f"No recordings folder yet ({lib}). It appears with the first recording."
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(lib))
+        else:
+            subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(lib)])
+    except OSError as exc:
+        return False, f"Could not open {lib}: {exc}"
+    return True, f"Opened {lib}"
+
+
 def browse(kind):
     try:
         out = subprocess.run([sys.executable, "-c", BROWSE_JS, kind],
@@ -308,6 +341,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        # No other site may frame the UI and borrow a click on its buttons.
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(data)
 
@@ -338,7 +374,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
-        if n > MAX_BODY:
+        if n < 0 or n > MAX_BODY:
             raise ValueError("body too large")
         data = json.loads(self.rfile.read(n) or b"{}")
         if not isinstance(data, dict):
@@ -399,6 +435,9 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/item/"):
                 ok, msg = edit_item(self.root, path.rsplit("/", 1)[1], str(body.get("id", "")))
                 return self._send(200, {"ok": ok, "message": msg})
+            if path == "/api/open/library":
+                ok, msg = open_library(self.root)
+                return self._send(200, {"ok": ok, "message": msg})
             if path == "/api/browse":
                 kind = "folder" if body.get("kind") == "folder" else "file"
                 return self._send(200, {"ok": True, "path": browse(kind)})
@@ -415,6 +454,17 @@ def make_server(root, port=DEFAULT_PORT):
     return httpd
 
 
+def _running_root(port):
+    """The folder a playcap UI already on this port serves, or None when the
+    port belongs to something else."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/setup", timeout=20) as r:
+            return json.loads(r.read()).get("root")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m playcap ui")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -426,7 +476,14 @@ def main(argv=None):
     try:
         httpd = make_server(root, args.port)
     except OSError:
-        print(f"Port {args.port} is busy -- playcap may already be running. Opening {url}")
+        other = _running_root(args.port)
+        if other is None:
+            sys.exit(f"Port {args.port} is in use by another program. "
+                     f"Start the UI on another port: python -m playcap ui --port {args.port + 1}")
+        if Path(other) != root:
+            sys.exit(f"A playcap UI for another folder ({other}) is already on port "
+                     f"{args.port}. Close it, or use --port {args.port + 1}.")
+        print(f"playcap is already running for this folder. Opening {url}")
         if not args.no_browser:
             webbrowser.open(url)
         return

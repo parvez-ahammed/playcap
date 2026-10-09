@@ -24,6 +24,8 @@ as OBS still lists it.
 enable_websocket() switches OBS's websocket server on by editing OBS's own
 config file -- only while OBS is closed, because OBS rewrites that file on
 exit. launch_obs() starts OBS the way the recorder's relaunch does.
+
+Command line: `python -m playcap.obs_setup` does both UI buttons in one go.
 """
 import json
 import os
@@ -220,3 +222,28 @@ def launch_obs(exe):
     exe = Path(exe)
     subprocess.Popen([str(exe), "--disable-shutdown-check"], cwd=str(exe.parent),
                      creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+
+
+def main(argv=None):
+    """`python -m playcap.obs_setup`: the UI's Launch OBS + Set up recording
+    scene, for command-line users. Starts OBS if it is closed (switching its
+    websocket on first), then makes sure the capture scene exists."""
+    import argparse
+    argparse.ArgumentParser(
+        prog="python -m playcap.obs_setup",
+        description="Start OBS if it is closed (switching its websocket server on "
+                    "first), then create or repair the 'playcap' screen-capture "
+                    "scene. Same as the UI's Launch OBS + Set up recording scene.",
+    ).parse_args(argv)
+    from playcap.ui import server       # deferred: the UI module is heavier
+    root = Path.cwd()
+    steps = ["setup"] if is_obs_running() else ["launch", "setup"]
+    for step in steps:
+        ok, msg = server.obs_action(root, step)
+        print(msg)
+        if not ok:
+            raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -18,7 +18,9 @@ Stopping is layered because no single mechanism works everywhere:
    check on their own loops. Works whoever started the job and from any
    console -- the reliable path.
 2. CTRL_BREAK (Windows) / SIGINT. Immediate, but on Windows it only reaches a
-   process on the same console, which a restarted UI is not.
+   process attached to the sender's console. UI jobs run with
+   CREATE_NO_WINDOW, i.e. on a console of their own, so for them this step
+   is a no-op and the flag does the work; it helps command-line runs.
    graceful_signals() makes CTRL_BREAK raise KeyboardInterrupt, so the job's
    own cleanup runs (OBS recording stopped, progress saved, partial deleted)
    instead of Python's default of dying on the spot.
@@ -26,7 +28,12 @@ Stopping is layered because no single mechanism works everywhere:
    then stops OBS itself, since the recorder's cleanup did not run.
 
 "after_current" is a flag the recorder reads between items: finish the item in
-flight, then exit.
+flight, then exit. Jobs drop flags older than themselves at startup
+(clear_stale_flags), so a late Stop never carries over to the next run.
+
+start() runs under a lock and records the OS's own creation time of the
+child, so two Start clicks cannot launch two recorders and a recycled PID is
+never taken for the job (and never force-killed).
 """
 import json
 import os
@@ -34,6 +41,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -50,6 +58,11 @@ LOGS = {"browser": ("chrome_launch.log", None), "queue": ("build_queue.log", Non
         "test": ("test_run.log", None)}
 EXCLUSIVE = {"record": "optimize", "optimize": "record"}
 START_TOLERANCE_S = 10   # PID-file start time vs. the process's real creation time
+EXACT_TOLERANCE_S = 2    # ... when the file holds the OS's own creation time
+FRIENDLY = {"browser": "The browser", "queue": "Loading the queue",
+            "record": "Recording", "optimize": "Re-compressing", "test": "The test"}
+RUN_MARK = "=== playcap run:"   # written to the log at each start (read by activity)
+_start_lock = threading.Lock()   # the UI server is threaded: two Start clicks at once
 
 
 def _dir(root):
@@ -97,6 +110,19 @@ def clear_flags(root, name):
         consume(root, name, kind)
 
 
+def clear_stale_flags(root, name):
+    """Called by a job as it starts: drop stop flags written before this process
+    existed. A Stop pressed just as a command-line run ended would otherwise
+    stop the next run at its first check."""
+    born = process_created(os.getpid()) or time.time()
+    for kind in ("now", "after_current"):
+        try:
+            if _flag(root, name, kind).stat().st_mtime < born - 1:
+                consume(root, name, kind)
+        except OSError:
+            pass
+
+
 # --- process liveness ----------------------------------------------------------
 def _creation_time_windows(pid):
     import ctypes
@@ -131,21 +157,32 @@ def _creation_time_posix(pid):
         return time.time()          # alive, age unknown: accept
 
 
-def pid_alive(pid, started=None):
+def process_created(pid):
+    """When the OS says pid was created (epoch seconds), or None if it is gone."""
+    return (_creation_time_windows(pid) if sys.platform.startswith("win")
+            else _creation_time_posix(pid))
+
+
+def pid_alive(pid, started=None, exact=False):
     if not pid:
         return False
-    created = (_creation_time_windows(pid) if sys.platform.startswith("win")
-               else _creation_time_posix(pid))
+    created = process_created(pid)
     if created is None:
         return False
-    if started is not None and abs(created - started) > START_TOLERANCE_S:
+    tolerance = EXACT_TOLERANCE_S if exact else START_TOLERANCE_S
+    if started is not None and abs(created - started) > tolerance:
         return False
     return True
 
 
+def _alive(info):
+    return bool(info) and pid_alive(info.get("pid"), info.get("started"),
+                                    bool(info.get("exact")))
+
+
 def _read_pidfile(root, name):
     try:
-        return json.loads(_pidfile(root, name).read_text())
+        return json.loads(_pidfile(root, name).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
@@ -154,7 +191,7 @@ def status(root):
     out = {}
     for name in NAMES:
         info = _read_pidfile(root, name)
-        alive = bool(info) and pid_alive(info.get("pid"), info.get("started"))
+        alive = _alive(info)
         if info and not alive:
             _pidfile(root, name).unlink(missing_ok=True)
         out[name] = {"running": alive, "pid": info.get("pid") if alive else None,
@@ -176,18 +213,24 @@ def command(name, cfg):
 def start(name, root, cfg, cmd=None, args=()):
     if name not in NAMES:
         return False, f"unknown job {name!r}"
+    with _start_lock:
+        return _start(name, root, cfg, cmd, args)
+
+
+def _start(name, root, cfg, cmd, args):
     st = status(root)
     if st[name]["running"]:
-        return False, f"{name} already running"
+        return False, f"{FRIENDLY[name]} is already running."
     other = EXCLUSIVE.get(name)
-    if other and (st[other]["running"] or external().get(other)):
-        return False, f"{other} is running; stop it first"
+    if other and (st[other]["running"] or external(max_age=0).get(other)):
+        return False, f"{FRIENDLY[other]} is running; stop it first."
     if name in EXCLUSIVE and external().get(name):
-        return False, f"{name} is already running outside the UI"
+        return False, f"{FRIENDLY[name]} is already running outside the UI."
     clear_flags(root, name)
     root = Path(root)
     out_name, err_name = LOGS[name]
     out = open(root / out_name, "a", encoding="utf-8")
+    print(f"{RUN_MARK} {name} {time.strftime('%Y-%m-%d %H:%M:%S')} ===", file=out, flush=True)
     err = open(root / err_name, "a", encoding="utf-8") if err_name else subprocess.STDOUT
     flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     if sys.platform.startswith("win"):
@@ -198,21 +241,25 @@ def start(name, root, cfg, cmd=None, args=()):
     code_root = str(Path(__file__).resolve().parent.parent)
     path = os.pathsep.join(p for p in (code_root, os.environ.get("PYTHONPATH", "")) if p)
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8",
-           "PYTHONPATH": path}
+           "PYTHONUTF8": "1", "PYTHONPATH": path}
     try:
         proc = subprocess.Popen((cmd or command(name, cfg)) + list(args), cwd=str(root), stdout=out,
                                 stderr=err, stdin=subprocess.DEVNULL,
                                 creationflags=flags, env=env,
                                 start_new_session=not sys.platform.startswith("win"))
     except OSError as exc:
-        return False, f"could not start {name}: {exc}"
+        return False, f"Could not start {FRIENDLY[name].lower()}: {exc}"
     finally:
         out.close()
         if err is not subprocess.STDOUT:
             err.close()
-    _pidfile(root, name).write_text(json.dumps(
-        {"pid": proc.pid, "started": time.time()}))
-    return True, f"started {name}"
+    # Popen still holds the process handle here, so the PID cannot have been
+    # reused yet: the OS creation time read now is the job's own. Comparing
+    # against it (not against time.time()) keeps a recycled PID from passing.
+    created = process_created(proc.pid)
+    settings.atomic_write_json(_pidfile(root, name), {
+        "pid": proc.pid, "started": created or time.time(), "exact": created is not None})
+    return True, f"{FRIENDLY[name]} started."
 
 
 def stop(name, root, mode="now"):
@@ -224,7 +271,7 @@ def stop(name, root, mode="now"):
                 return "will stop after the current item (started outside the UI)"
             request(root, name, "now")
             return "stop requested (started outside the UI; it will stop at its next check)"
-        return f"{name} is not running"
+        return f"{FRIENDLY[name]} is not running."
     if mode == "after_current":
         if name != "record":
             return "stop after current is only for recording"
@@ -236,13 +283,13 @@ def stop(name, root, mode="now"):
         os.kill(st["pid"], sig)
     except (OSError, ValueError):
         pass        # other console / gone: the flag still stops it
-    return f"stopping {name}"
+    return f"Stopping: {FRIENDLY[name].lower()}."
 
 
 def kill(name, root):
     info = _read_pidfile(root, name)
     pid = info.get("pid") if info else None
-    if pid and pid_alive(pid, info.get("started")):
+    if pid and _alive(info):
         if sys.platform.startswith("win"):
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
                            capture_output=True)
@@ -252,12 +299,12 @@ def kill(name, root):
             except OSError:
                 pass
         for _ in range(50):
-            if not pid_alive(pid, info.get("started")):
+            if not _alive(info):
                 break
             time.sleep(0.1)
     _pidfile(root, name).unlink(missing_ok=True)
     clear_flags(root, name)
-    return f"{name} force-stopped"
+    return f"{FRIENDLY[name]} was force-stopped."
 
 
 def graceful_signals():

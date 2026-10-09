@@ -92,6 +92,10 @@ class Adapter:
     label: str = "Custom adapter"
     setup_fields: list = []
 
+    #: False when build_queue reads only local files (no browser, no login),
+    #: so the UI can rebuild the queue by itself right after settings are saved
+    queue_needs_browser: bool = True
+
     #: wording used in plans and the dashboard
     labels = {
         "locked": "locked",

@@ -1,4 +1,4 @@
-# playcap (repo: video-recorder)
+# playcap (repo: playcap)
 
 An open-source browser DVR (GPL-3.0-or-later). It drives a real logged-in Chrome through
 CDP, captures the screen with OBS until the page's `<video>` ends, then files the results by a
@@ -26,6 +26,7 @@ playcap/                 generic core. No site names anywhere in it.
   settings.py            validated, atomic config.json saves for the UI
   jobs.py                start/stop jobs: PID files, stop flags in .playcap/, CTRL_BREAK, kill
   state.py               one snapshot for the UI (items, library, health, problems)
+  activity.py            each job's last run as one plain sentence, read from its log
   obs_setup.py           idempotent OBS scene/capture setup; enables OBS websocket while OBS is closed
   record_quality.py      recording encoder (CRF/CBR) presets; written into OBS's profile while OBS is closed
   screen.py              aims OBS at the browser's monitor, pins the browser window on top (Windows)

@@ -14,6 +14,13 @@ import websocket
 CDP_HTTP = "http://127.0.0.1:9222"
 
 
+def set_port(port):
+    """Talk to the browser on config's chrome_debug_port (config.load calls this),
+    so a browser launched on another port is the one that gets driven."""
+    global CDP_HTTP
+    CDP_HTTP = f"http://127.0.0.1:{int(port)}"
+
+
 class CdpError(RuntimeError):
     pass
 

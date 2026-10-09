@@ -25,7 +25,7 @@ import json
 import sys
 from pathlib import Path
 
-from playcap import adapters, detect, record_quality
+from playcap import adapters, cdp, detect, record_quality
 
 CONFIG_FILE = Path("config.json")
 GENERIC_ADAPTER = "playcap.adapters.html5_video"
@@ -77,11 +77,13 @@ def load(path=None):
         return _cache[key]
     if not path.exists():
         sys.exit(f"No {path} -- copy config.example.json to config.json and edit it.")
-    user = json.loads(path.read_text())
+    user = json.loads(path.read_text(encoding="utf-8"))
     adapter = adapters.load(user.get("adapter") or default_adapter_path())
     cfg = {**DEFAULTS, **adapter.config_defaults, **user}
     # OBS connection details the user never typed come from OBS itself.
-    cfg["obs_ws_url"], cfg["obs_password"] = detect.obs_settings(user)
+    cfg["obs_ws_url"], cfg["obs_password"] = detect.obs_settings(
+        {**adapter.config_defaults, **user})
     adapter.cfg = cfg
+    cdp.set_port(cfg["chrome_debug_port"])
     _cache[key] = (cfg, adapter)
     return cfg, adapter

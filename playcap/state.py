@@ -3,8 +3,9 @@
     snapshot(root) -> dict
 
 Reads only the files the pipeline already writes (config, queue, progress,
-optimize state, .playcap/now.json, logs) plus three live checks: is the debug
-browser's port open, does OBS answer, how much disk is free. Nothing here
+optimize state, .playcap/now.json, logs -- also summarized in plain words by
+playcap.activity) plus three live checks: is the debug browser's port open,
+does OBS answer, how much disk is free. Nothing here
 holds state of its own, so the UI can be closed and reopened at any time.
 
 The three live checks are slow when things are down (a closed localhost port
@@ -12,6 +13,9 @@ takes ~0.5 s to refuse on Windows, an OBS handshake times out after 2 s, the
 process scan takes ~1 s), so the UI server runs them in a background thread
 (start_background) and snapshot() reads the latest result. Without the thread
 -- tests, one-off calls -- they run inline.
+
+Problems carry an optional "level": "info" marks a condition playcap fixes by
+itself (OBS closed: the recorder starts it), which the UI shows without alarm.
 
 Every file read degrades to "empty" when the file is missing, half-written or
 corrupt -- a status page must never be the thing that crashes.
@@ -28,7 +32,7 @@ from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from playcap import adapters, config, detect, jobs, settings
+from playcap import activity, adapters, config, detect, jobs, settings
 from playcap.browser import port_open
 from playcap.recorder import free_gb
 from playcap.status import tail_progress
@@ -109,6 +113,7 @@ FRIENDLY_ERRORS = [   # (substring of the raw error, what to tell a person)
 def friendly_error(raw):
     if not raw:
         return None
+    raw = str(raw)
     for needle, text in FRIENDLY_ERRORS:
         if needle.lower() in raw.lower():
             return text
@@ -146,27 +151,45 @@ def _items(root, cfg, adapter):
     return out
 
 
-def _library(root, cfg):
+def library_dir(root, cfg):
     lib = Path(cfg["output_dir"])
-    if not lib.is_absolute():
-        lib = Path(root) / lib
+    return lib if lib.is_absolute() else Path(root) / lib
+
+
+def _library(root, cfg):
+    lib = library_dir(root, cfg)
     if not lib.exists():
         return []
     archive = lib.parent / (lib.name + "_originals")
-    done = {str(Path(v["file"])).lower()
+    done = {str((Path(root) / v["file"]).resolve()).lower()
             for v in _read_json(Path(root) / cfg["optimize_state"], {}).values()
             if isinstance(v, dict) and v.get("status") == "done" and v.get("file")}
+    # One walk of the archive per call, keyed by relative path without
+    # extension (and by bare stem as a fallback). Files can vanish mid-scan --
+    # optimize moves originals while this runs -- so every stat is guarded.
+    originals = {}
+    if archive.exists():
+        for p in archive.rglob("*"):
+            if p.suffix.lower() in (".mkv", ".mp4"):
+                try:
+                    gb = p.stat().st_size / 1024 ** 3
+                except OSError:
+                    continue
+                rel = str(p.relative_to(archive).with_suffix("")).lower()
+                originals.setdefault(rel, gb)
+                originals.setdefault(p.stem.lower(), gb)
     out = []
     for f in sorted(list(lib.rglob("*.mp4")) + list(lib.rglob("*.mkv"))):
         if "_partial" in f.parts:
             continue
-        before = None
-        if archive.exists():
-            orig = next((p for ext in (".mkv", ".mp4")
-                         for p in archive.rglob(f.stem + ext)), None)
-            before = orig.stat().st_size / 1024 ** 3 if orig else None
-        out.append({"name": f.stem, "gb": f.stat().st_size / 1024 ** 3,
-                    "optimized": str(f).lower() in done, "before_gb": before})
+        try:
+            gb = f.stat().st_size / 1024 ** 3
+        except OSError:
+            continue
+        rel = str(f.relative_to(lib).with_suffix("")).lower()
+        before = originals.get(rel, originals.get(f.stem.lower()))
+        out.append({"name": f.stem, "gb": gb,
+                    "optimized": str(f.resolve()).lower() in done, "before_gb": before})
     return out
 
 
@@ -243,6 +266,9 @@ def snapshot(root):
                          "fix": "setup"})
         return snap
     snap["source_label"] = adapter.label
+    snap["queue_offline"] = not getattr(adapter, "queue_needs_browser", True)
+    snap["avg_item_minutes"] = cfg.get("avg_item_minutes")
+    snap["library_dir"] = str(library_dir(root, cfg))
 
     fresh = _live["thread"] and _live["data"] and time.time() - _live["t"] < LIVE_STALE_S
     live = _live["data"] if fresh else probe(root, raw_cfg, cfg)
@@ -260,8 +286,14 @@ def snapshot(root):
     if snap["jobs"]["optimize"]["running"] or snap["external"].get("optimize"):
         snap["encode"] = tail_progress(root / "optimize.err")
     snap["log"] = {n: jobs.tail(root, n, 15) for n in jobs.NAMES}
+    snap["activity"] = activity.summarize(root)
 
-    if not ok:
+    if not ok and msg == "OBS is not running":
+        # Not a blocker: the recorder starts OBS itself (recorder.connect_obs).
+        problems.append({"code": "obs", "level": "info",
+                         "text": "OBS is closed. playcap starts it when recording begins.",
+                         "fix": "launch_obs"})
+    elif not ok:
         problems.append({"code": "obs", "text": msg, "fix": "launch_obs"})
     if not snap["health"]["browser"]:
         problems.append({"code": "browser",

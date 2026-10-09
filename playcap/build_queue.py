@@ -9,6 +9,9 @@ front end can produce.)
 Writes the queue file (config "queue_file") in the adapter's own entry shape,
 then prints a summary using the normalised fields.
 
+The queue is replaced atomically, the previous one is kept as <queue>.bak,
+and an empty result never replaces a queue.
+
 Usage:  python build_queue.py                # adapter default source from config.json
         python build_queue.py <source>       # adapter-specific: a URL or file path
 """
@@ -17,6 +20,7 @@ import sys
 from pathlib import Path
 
 from playcap import config
+from playcap.settings import atomic_write_text
 
 
 def main(argv=None):
@@ -25,7 +29,16 @@ def main(argv=None):
     out = Path(cfg["queue_file"])
 
     raws = adapter.build_queue(cfg, argv)
-    out.write_text(json.dumps(raws, indent=1))
+    if not raws:
+        # A scrape that found nothing (logged out, page changed) must not wipe
+        # a good queue: item numbers -- and so file names -- come from it.
+        sys.exit("The source returned no items; the existing queue was left as it was.")
+    text = json.dumps(raws, indent=1, ensure_ascii=False)
+    if out.exists():
+        old = out.read_text(encoding="utf-8")
+        if old != text:
+            atomic_write_text(out.with_name(out.name + ".bak"), old)
+    atomic_write_text(out, text)
 
     items = [adapter.item(r) for r in raws]
     locked = sum(1 for i in items if i.locked)

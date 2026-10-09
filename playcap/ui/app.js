@@ -14,6 +14,9 @@ let chosenSource = null;
 let queueFilter = "attention";
 let stopSeen = {};               // job -> first time we saw it "stopping"
 let busy = false;
+let testWasRunning = false;      // to announce when a 25 s test finishes
+let tokenStale = false;          // the server restarted with a new token; only a reload helps
+const lastRender = {};           // section -> JSON of the inputs it was last drawn from
 
 // ---------------------------------------------------------------- helpers
 function el(tag, attrs = {}, ...children) {
@@ -32,27 +35,94 @@ function el(tag, attrs = {}, ...children) {
   return n;
 }
 
+// The dashboard redraws from a poll every 2 s. Rebuilding a section that has
+// not changed would throw away keyboard focus and swallow a click that lands
+// mid-rebuild, so each section redraws only when the data it is drawn from
+// changes. Functions are left out of the key: list everything a closure
+// captures (ids, labels) in the inputs.
+function changed(section, inputs) {
+  const key = JSON.stringify(inputs);
+  if (lastRender[section] === key) return false;
+  lastRender[section] = key;
+  return true;
+}
+
+// A message across the top of the page. Each source ("state", "setup",
+// "save") owns its own message, so the dashboard poll recovering clears only
+// its own and not, say, a wizard error. A stale page (tokenStale) outranks
+// everything: only a reload helps, so the Reload button must stay.
+const banners = new Map();             // source -> text, latest last
+let serverDown = false;                // the last /api/state fetch did not connect
+
+function showBanner(source, text) {
+  banners.delete(source);
+  banners.set(source, text);
+  drawBanner();
+}
+function clearBanner(source) {
+  if (banners.delete(source)) drawBanner();
+}
+function drawBanner() {
+  let text = null;
+  if (tokenStale) {
+    text = serverDown
+      ? "The playcap UI server is not responding. Start it again (python -m playcap ui), then reload this page."
+      : "playcap was restarted. Reload this page to carry on.";
+  } else if (banners.size) {
+    text = [...banners.values()].pop();
+  }
+  if (text === null) { $("banner").hidden = true; return; }
+  // role=alert: rewriting the same text makes a screen reader say it again.
+  if ($("banner-text").textContent !== text) $("banner-text").textContent = text;
+  $("banner-reload").hidden = !tokenStale;
+  $("banner").hidden = false;
+}
+
 async function api(path, body) {
   const opts = body === undefined ? {} : {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Playcap-Token": TOKEN },
     body: JSON.stringify(body),
   };
-  const res = await fetch(path, opts);
+  let res;
+  try {
+    res = await fetch(path, opts);
+  } catch (e) {
+    // The server went away. If it comes back it is a new process with a new
+    // token, and the first poll that succeeds cannot tell (GETs carry no
+    // token). So from here on the page counts as stale and keeps the Reload
+    // banner rather than letting a good /api/state poll clear it.
+    tokenStale = true;
+    drawBanner();
+    throw e;
+  }
   let data = {};
   try { data = await res.json(); } catch (e) { /* non-JSON */ }
+  if (!data || typeof data !== "object" || Array.isArray(data)) data = {};
   if (!res.ok && data.ok === undefined) data = { ok: false, message: `HTTP ${res.status}` };
+  // Each server start makes a new token. A page left open across a restart
+  // still carries the old one, so every button would fail with "bad token".
+  if (res.status === 403 && data.message === "bad token") {
+    tokenStale = true;
+    data.message = "playcap was restarted. Reload this page to carry on.";
+    drawBanner();
+  }
   return data;
 }
 
 function toast(message, ok = true) {
-  const t = el("div", { class: "toast" + (ok ? "" : " bad"), text: message });
+  const t = el("div", { class: "toast" + (ok ? "" : " bad"), text: message,
+    title: "Click to dismiss", onclick: () => t.remove() });
   $("toasts").append(t);
   setTimeout(() => t.remove(), ok ? 4000 : 8000);
 }
 
 async function act(path, body, after) {
-  if (busy) return;
+  if (busy) {
+    // One action at a time; say so rather than swallowing the click.
+    toast("Still working on the last action…");
+    return;
+  }
   busy = true;
   try {
     const r = await api(path, body);
@@ -68,7 +138,11 @@ async function act(path, body, after) {
 
 const job = (action, name, extra = {}) => act(`/api/job/${action}`, { job: name, ...extra });
 
-function gb(x) { return x == null ? "—" : (x >= 10 ? x.toFixed(0) : x.toFixed(2)) + " GB"; }
+function hours(min) {
+  if (!min) return "";
+  return min < 90 ? `${Math.round(min)} min` : `${+(min / 60).toFixed(min < 600 ? 1 : 0)} h`;
+}
+function gb(x) { return typeof x !== "number" || !isFinite(x) ? "—" : (x >= 10 ? x.toFixed(0) : x.toFixed(2)) + " GB"; }
 function clock(sec) {
   if (sec == null || !isFinite(sec)) return "—";
   sec = Math.max(0, Math.round(sec));
@@ -78,13 +152,23 @@ function clock(sec) {
 
 // ---------------------------------------------------------------- polling
 async function refresh() {
+  let s;
   try {
-    snap = await api("/api/state");
+    s = await api("/api/state");
   } catch (e) {
-    $("health").replaceChildren(el("span", { class: "dot", text: "UI server stopped" }));
+    setHealth([["", "UI server stopped"]]);
+    serverDown = true;
+    drawBanner();                       // api() already set tokenStale
     return;
   }
-  if (!snap || snap.configured === undefined) return;
+  if (serverDown) { serverDown = false; drawBanner(); }   // back, but the page is still stale
+  if (s.ok === false || s.configured === undefined) {
+    // Keep the last good snapshot on screen; say why it is not updating.
+    showBanner("state", "Could not read playcap's state: " + (s.message || "unexpected reply from the server."));
+    return;
+  }
+  clearBanner("state");
+  snap = s;
   if (!snap.configured) {
     if ($("wizard").hidden) openWizard(false);
     return;
@@ -99,17 +183,25 @@ setInterval(() => { if (!document.hidden && !busy) refresh(); }, POLL_MS);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 
 // ---------------------------------------------------------------- dashboard
+// #health is an aria-live region: touch it only when its text changes, or a
+// screen reader re-announces it on every poll.
+function setHealth(dots) {
+  if (!changed("health", dots)) return;
+  $("health").replaceChildren(...dots.map(([cls, text]) => el("span", { class: "dot" + cls, text })));
+}
+
 function renderHealth() {
   const h = snap.health || {};
-  const items = [
-    el("span", { class: "dot" + (h.browser ? " ok" : ""), text: h.browser ? "Browser" : "Browser closed" }),
-    el("span", { class: "dot" + (h.obs ? " ok" : ""), text: h.obs ? "OBS" : "OBS offline" }),
+  const dots = [
+    [h.browser ? " ok" : "", h.browser ? "Browser" : "Browser closed"],
+    [h.obs ? " ok" : "", h.obs ? "OBS" : "OBS offline"],
   ];
-  if (h.disk_gb != null) {
-    items.push(el("span", { class: "dot" + (h.disk_gb >= 10 ? " ok" : ""), text: `${h.disk_gb.toFixed(0)} GB free` }));
+  if (typeof h.disk_gb === "number") {
+    dots.push([h.disk_gb >= 10 ? " ok" : "", `${h.disk_gb.toFixed(0)} GB free`]);
   }
-  $("health").replaceChildren(...items);
-  $("showname").textContent = snap.show ? "· " + snap.show : "";
+  setHealth(dots);
+  const show = snap.show ? "· " + snap.show : "";
+  if ($("showname").textContent !== show) $("showname").textContent = show;
 }
 
 const FIXES = {
@@ -121,33 +213,97 @@ const FIXES = {
 
 function renderProblems() {
   const recording = isRunning("record");
-  const list = (snap.problems || []).filter((p) => !(recording && p.code === "queue"));
+  // The getting-started checklist already covers the browser and the queue.
+  const covered = showStart() ? ["browser", "queue"] : [];
+  const list = (snap.problems || []).filter((p) => p &&
+    !(recording && p.code === "queue") && !covered.includes(p.code));
+  if (!changed("problems", list)) return;
   $("problems").replaceChildren(...list.map((p) => {
     const fix = FIXES[p.fix];
-    return el("li", {}, el("span", { text: p.text }),
+    return el("li", { class: p.level === "info" ? "info" : null }, el("span", { text: p.text }),
       fix ? el("button", { class: "btn small", onclick: fix[1], text: fix[0] }) : null);
   }));
 }
 
 function isRunning(name) {
-  return !!(snap.jobs[name] && snap.jobs[name].running) || !!(snap.external && snap.external[name]);
+  const j = (snap.jobs || {})[name];
+  return !!(j && j.running) || !!(snap.external && snap.external[name]);
+}
+
+// ---- first run: an ordered checklist instead of a pile of warnings ----
+function showStart() {
+  const c = snap.counts || {};
+  return !c.done && !(snap.library || []).length && !isRunning("record");
+}
+
+function firstReady() {
+  return (snap.items || []).find((i) => i.state === "waiting" || i.state === "failed");
+}
+
+// The test step ticks only when the latest test passed; activity.py keeps one
+// entry per job (its last run), level "ok" for a real picture.
+function lastTest() {
+  return (snap.activity || []).find((a) => a && a.job === "test") || null;
+}
+
+function renderStart() {
+  $("start").hidden = !showStart();
+  if ($("start").hidden) return;
+  const c = snap.counts || {}, h = snap.health || {};
+  const ready = firstReady();
+  const loading = isRunning("queue"), testing = isRunning("test"), opt = isRunning("optimize");
+  const test = lastTest();
+  const testHint = "Plays the first video for 25 seconds, records it and checks the picture is not black.";
+  const steps = [
+    { done: !!h.browser, title: "Open the playcap browser",
+      hint: "A separate Chrome window that playcap controls. If your site needs an account, log in there once. playcap never sees your password.",
+      btn: ["Open browser", () => job("start", "browser")] },
+    { done: c.total > 0, title: "Load the queue",
+      hint: snap.queue_offline ? "playcap reads your list of links."
+        : "playcap reads the list of videos from your site. Log in first if it needs it.",
+      btn: [loading ? "Loading…" : "Load queue", () => job("start", "queue"), loading] },
+    { done: !!test && test.level === "ok", title: "Try one item (optional)",
+      hint: test && test.level !== "ok" && !testing ? `Last try: ${test.text}` : testHint,
+      btn: [testing ? "Testing…" : "Test 25 s", () => ready && job("start", "test", { item: ready.id }),
+        testing || !ready || opt] },
+    { done: false, title: "Start recording",
+      hint: "Each video plays to the end, is recorded, and is filed in your library. You can leave it running; a rerun picks up where it stopped.",
+      btn: ["Start recording", () => job("start", "record"), testing || !ready || opt, "primary"] },
+  ];
+  // ready.id is captured by the Test button's closure, so it is part of the key.
+  const key = steps.map((st) => [st.done, st.title, st.hint, st.btn[0], !!st.btn[2], st.btn[3] || ""]);
+  if (!changed("start", [key, ready && ready.id])) return;
+  $("start-steps").replaceChildren(...steps.map((st) => el("li", { class: st.done ? "done" : null },
+    el("div", {}, el("strong", { text: st.title }), el("div", { class: "muted small", text: st.hint })),
+    st.done ? null : el("button", { class: "btn small " + (st.btn[3] || ""), text: st.btn[0],
+      disabled: !!st.btn[2], onclick: st.btn[1] }))));
+}
+
+function noteTestFinished() {
+  const running = isRunning("test");
+  if (testWasRunning && !running) {
+    const res = lastTest();
+    toast(res ? res.text : "Test finished. See What happened.", !res || res.level !== "bad");
+  }
+  testWasRunning = running;
 }
 
 function stoppingTooLong(name) {
-  const j = snap.jobs[name] || {};
+  const j = (snap.jobs || {})[name] || {};
   if (!j.running || !j.stopping) { delete stopSeen[name]; return false; }
   stopSeen[name] = stopSeen[name] || Date.now();
   return Date.now() - stopSeen[name] > FORCE_AFTER_MS;
 }
 
 function renderControls() {
-  const rec = isRunning("record"), opt = isRunning("optimize");
-  const recJob = snap.jobs.record || {}, optJob = snap.jobs.optimize || {};
+  const rec = isRunning("record"), opt = isRunning("optimize"), testing = isRunning("test");
+  const jobs = snap.jobs || {};
+  const recJob = jobs.record || {}, optJob = jobs.optimize || {};
   const c = snap.counts || {};
   const toRecord = (c.waiting || 0) + (c.failed || 0);
   const external = snap.external || {};
 
-  $("rec-start").disabled = rec || opt || toRecord === 0;
+  $("rec-start").disabled = rec || opt || testing || toRecord === 0;
   $("rec-start").textContent = rec ? "Recording…" : "Start recording";
   $("rec-stop-after").hidden = !rec || recJob.stopping_after || recJob.stopping;
   $("rec-stop-now").hidden = !rec || recJob.stopping;
@@ -158,7 +314,8 @@ function renderControls() {
   else if (recJob.stopping) note = "Stopping… the current recording is being closed cleanly.";
   else if (recJob.stopping_after) note = "Will stop when the current item finishes.";
   else if (rec && external.record) note = "Recording was started outside this window.";
-  else if (!rec) note = toRecord ? `${toRecord} item${toRecord > 1 ? "s" : ""} ready to record.` : "Nothing ready to record.";
+  else if (testing) note = "A 25 s test is running. Recording can start once it finishes.";
+  else if (!rec) note = toRecord ? readyNote(toRecord) : nothingReadyNote(c);
   $("rec-note").textContent = note;
 
   $("opt-start").disabled = rec || opt;
@@ -167,12 +324,28 @@ function renderControls() {
   $("opt-kill").hidden = !stoppingTooLong("optimize");
   $("opt-note").textContent = optJob.stopping ? "Stopping after ffmpeg exits — the file in progress is discarded, the original is untouched."
     : (opt && external.optimize ? "Re-compressing was started outside this window." :
-      "Optional. Only helps recordings made at a fixed bitrate (about 1.3x smaller); files recorded in a quality mode are skipped. Originals are kept until each new file is checked.");
+      "Optional: shrinks recordings made at a fixed bitrate (about 1.3x). Files recorded in a quality mode are skipped. Originals are kept until each new file is checked.");
 
   $("browser-start").disabled = !!(snap.health || {}).browser;
   $("browser-start").textContent = (snap.health || {}).browser ? "Browser open" : "Open browser";
   $("queue-start").disabled = rec || isRunning("queue");
   $("queue-start").textContent = isRunning("queue") ? "Refreshing…" : "Refresh queue";
+}
+
+function readyNote(n) {
+  const eta = snap.avg_item_minutes ? ` · roughly ${hours(n * snap.avg_item_minutes)} in all` : "";
+  return `${n} item${n > 1 ? "s" : ""} ready to record${eta}.`;
+}
+
+function nothingReadyNote(c) {
+  if (!c.total) return "Load the queue first.";
+  const why = [];
+  if (c.not_aired) why.push(`${c.not_aired} not aired yet`);
+  if (c.locked) why.push(`${c.locked} locked`);
+  if (c.skipped) why.push(`${c.skipped} skipped`);
+  if (!why.length) return "Everything in the queue is recorded.";
+  return `Nothing ready to record: ${why.join(", ")}.` +
+    (c.not_aired ? " Not-aired items become ready two hours after they air." : "");
 }
 
 function renderNow() {
@@ -183,7 +356,8 @@ function renderNow() {
     const pct = n.duration ? Math.min(100, (100 * (n.t || 0)) / n.duration) : 0;
     $("now-bar").style.width = pct.toFixed(1) + "%";
     const res = n.w && n.h ? ` · ${n.w}×${n.h}` : "";
-    $("now-meta").textContent = `${clock(n.t)} of ${clock(n.duration)} (${pct.toFixed(0)}%)` +
+    const place = n.n && n.of > 1 ? `Item ${n.n} of ${n.of} · ` : "";
+    $("now-meta").textContent = place + `${clock(n.t)} of ${clock(n.duration)} (${pct.toFixed(0)}%)` +
       ` · recording for ${clock(n.elapsed)}${res}`;
     $("now-black").hidden = !n.black;
   }
@@ -207,25 +381,33 @@ const CHIP = { done: "done", failed: "failed", skipped: "skipped", waiting: "wai
   not_aired: "not aired", locked: "locked" };
 
 function renderQueue() {
-  const items = snap.items || [];
+  const items = (snap.items || []).filter((i) => i && typeof i === "object");
+  const rec = isRunning("record"), optRunning = isRunning("optimize"), testRunning = isRunning("test");
+  const nowId = snap.now && snap.now.id;
+  // Everything the rows and their buttons are drawn from (see changed()).
+  if (!changed("queue", [items, queueFilter, rec, optRunning, testRunning, nowId])) return;
   $("queue-tabs").replaceChildren(...TABS.map(([key, label, pred]) => {
     const n = items.filter(pred).length;
-    return el("button", { class: "tab" + (queueFilter === key ? " active" : ""), role: "tab",
-      onclick: () => { queueFilter = key; renderQueue(); }, text: `${label} ${n}` });
+    const active = queueFilter === key;
+    return el("button", { class: "tab" + (active ? " active" : ""), role: "tab",
+      "aria-selected": active ? "true" : "false",
+      onclick: () => {
+        queueFilter = key; renderQueue();
+        const now = $("queue-tabs").querySelector(".tab.active");   // keep focus on the tab row
+        if (now) now.focus();
+      }, text: `${label} ${n}` });
   }));
   const pred = (TABS.find((t) => t[0] === queueFilter) || TABS[0])[2];
   const rows = items.filter(pred);
-  const rec = isRunning("record");
-  const nowId = snap.now && snap.now.id;
   $("queue-body").replaceChildren(...rows.map((i) => {
     const recordingThis = rec && nowId === i.id;
     const actions = [];
-    if (!rec && !isRunning("optimize") && (i.state === "waiting" || i.state === "failed")) {
+    if (!rec && !optRunning && !testRunning && (i.state === "waiting" || i.state === "failed")) {
       actions.push(el("button", { class: "btn small", text: "Record",
         title: "Record just this one, then stop",
         onclick: () => job("start", "record", { item: i.id }) }));
-      if (!isRunning("test")) actions.push(el("button", { class: "btn small ghost", text: "Test 25 s",
-        title: "Play this page for 25 s, record it, and check the picture is not black. Result under Logs.",
+      actions.push(el("button", { class: "btn small ghost", text: "Test 25 s",
+        title: "Play this page for 25 s, record it, and check the picture is not black. Result under What happened.",
         onclick: () => job("start", "test", { item: i.id }) }));
     }
     if (!rec) {
@@ -237,48 +419,79 @@ function renderQueue() {
         onclick: () => act("/api/item/unskip", { id: i.id }) }));
     }
     return el("tr", {},
-      el("td", {}, el("div", { text: i.title }),
+      el("td", {}, el("div", { text: i.title || i.id || "" }),
         i.state === "failed" && i.error ? el("div", { class: "err-text", text: i.error, title: i.error_raw || "" }) : null),
       el("td", { class: "nowrap muted small", text: [i.day, i.time].filter((x) => x && x !== "-").join(" ") }),
       el("td", {}, el("span", { class: "chip " + (recordingThis ? "recording" : i.state),
-        text: recordingThis ? "recording" : (CHIP[i.state] || i.state) })),
+        text: recordingThis ? "recording" : (CHIP[i.state] || i.state || "") })),
       el("td", { class: "actions" }, ...actions));
   }));
   const empty = rows.length === 0;
   $("queue-empty").hidden = !empty;
   $("queue-empty").textContent = items.length === 0
     ? "The queue is empty. Press “Refresh queue” to read it from your source."
-    : "Nothing in this list.";
+    : (queueFilter === "attention" ? "Nothing waiting to be recorded." : "Nothing in this list.");
 }
 
 function renderLibrary() {
-  const lib = snap.library || [];
-  const total = lib.reduce((a, e) => a + e.gb, 0);
+  const lib = (snap.library || []).filter((e) => e && typeof e === "object");
+  const total = lib.reduce((a, e) => a + (Number(e.gb) || 0), 0);
   const shrunk = lib.filter((e) => e.optimized).length;
   $("lib-summary").textContent = lib.length
-    ? `${lib.length} episodes · ${gb(total)} · ${shrunk} shrunk` : "No recordings yet";
+    ? `${lib.length} recording${lib.length > 1 ? "s" : ""} · ${gb(total)}` + (shrunk ? ` · ${shrunk} shrunk` : "") : "";
+  $("lib-path").textContent = snap.library_dir ? "Saved in " + snap.library_dir : "";
+  $("lib-empty").hidden = lib.length > 0;
+  $("lib-body").closest("table").hidden = !lib.length;
+  // Re-compressing is an occasional chore, so it lives here rather than
+  // beside Start recording, and only once there is something to shrink.
+  $("lib-opt").hidden = !lib.length && !isRunning("optimize");
+  if (!changed("library", lib)) return;
   $("lib-body").replaceChildren(...lib.map((e) => el("tr", {},
-    el("td", { text: e.name }),
+    el("td", { text: e.name || "" }),
     el("td", { class: "num nowrap", text: gb(e.gb) + (e.before_gb ? `  (was ${gb(e.before_gb)})` : "") }),
     el("td", {}, el("span", { class: "chip " + (e.optimized ? "done" : ""), text: e.optimized ? "yes" : "not yet" })),
   )));
+}
+
+function ago(ts) {
+  if (!ts) return "";
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 90) return "just now";
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  if (s < 129600) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} days ago`;
+}
+
+const MARK = { ok: "✓", bad: "!", info: "•" };
+function renderActivity() {
+  const list = (snap.activity || []).filter((a) => a && typeof a === "object");
+  $("activity-card").hidden = !list.length;
+  $("activity").replaceChildren(...list.map((a) => el("li", { class: a.level },
+    el("span", { class: "mark", text: MARK[a.level] || "•" }),
+    el("span", { class: "what", text: a.text || "" }),
+    el("span", { class: "muted small nowrap", text: `${LOG_NAMES[a.job] || a.job} · ${ago(a.when)}` }))));
 }
 
 const LOG_NAMES = { test: "Test run", record: "Recording", optimize: "Re-compressing", queue: "Queue", browser: "Browser" };
 function renderLogs() {
   if (!document.querySelector(".logs").open) return;
   const logs = snap.log || {};
+  // Redrawing would reset each box's scroll position every poll.
+  if (!changed("logs", Object.keys(LOG_NAMES).map((k) => logs[k] || ""))) return;
   $("logs").replaceChildren(...Object.keys(LOG_NAMES).map((k) =>
     el("div", {}, el("h4", { text: LOG_NAMES[k] }), el("pre", { text: logs[k] || "(empty)" }))));
 }
 
 function renderDash() {
   renderHealth();
+  noteTestFinished();
+  renderStart();
   renderProblems();
   renderControls();
   renderNow();
   renderQueue();
   renderLibrary();
+  renderActivity();
   renderLogs();
 }
 
@@ -302,18 +515,45 @@ $("opt-kill").onclick = () => {
 $("browser-start").onclick = () => job("start", "browser");
 $("queue-start").onclick = () => job("start", "queue");
 $("settings-btn").onclick = () => openWizard(true);
+$("banner-reload").onclick = () => location.reload();
+$("lib-open").onclick = () => act("/api/open/library", {});
 document.querySelector(".logs").addEventListener("toggle", () => snap && renderLogs());
 
 // ---------------------------------------------------------------- wizard
 const TOOL_LABELS = { chrome: "Chrome", obs: "OBS", ffmpeg: "ffmpeg", ffprobe: "ffprobe" };
 const TOOL_KEYS = { chrome: "chrome_exe", obs: "obs_exe", ffmpeg: "ffmpeg", ffprobe: "ffprobe" };
+const TOOL_HELP = {   // what each one is for, and where to get it when it is missing
+  chrome: ["plays the video pages", "https://www.google.com/chrome/"],
+  obs: ["records the screen", "https://obsproject.com/download"],
+  ffmpeg: ["checks and shrinks finished recordings", "https://ffmpeg.org/download.html"],
+  ffprobe: ["reads each recording's length (comes with ffmpeg)", "https://ffmpeg.org/download.html"],
+};
+
+// /api/setup with every field the wizard reads filled in, so a server error
+// (or an older server) shows a message instead of a half-drawn wizard.
+async function loadSetup() {
+  let r;
+  try {
+    r = await api("/api/setup");
+  } catch (e) {
+    r = { ok: false, message: "the playcap UI server is not responding." };
+  }
+  if (r.ok === false) showBanner("setup", "Could not read the setup details: " + (r.message || "unknown error."));
+  else clearBanner("setup");
+  const out = { ...r };
+  for (const k of ["config", "tools", "recording"]) {
+    if (!out[k] || typeof out[k] !== "object") out[k] = {};
+  }
+  if (!Array.isArray(out.adapters)) out.adapters = [];
+  return out;
+}
 
 async function openWizard(cancellable) {
   $("dash").hidden = true;
   $("wizard").hidden = false;
   $("settings-btn").hidden = true;
   $("wiz-cancel").hidden = !cancellable;
-  setup = await api("/api/setup");
+  setup = await loadSetup();
   renderTools();
   renderObsStatus();
   const cfg = setup.config || {};
@@ -321,9 +561,39 @@ async function openWizard(cancellable) {
   renderSources();
   $("output_dir").value = cfg.output_dir || (setup.root ? setup.root.replace(/[\\/]+$/, "") + (setup.root.includes("\\") ? "\\" : "/") + "recordings" : "");
   $("show").value = cfg.show || "My Recordings";
+  renderOutputFull();
   renderQuality();
   renderLayout();
   showStep(1);
+}
+
+// A relative folder is relative to the playcap folder; say where that is.
+function renderOutputFull() {
+  const v = $("output_dir").value.trim();
+  const root = (setup.root || "").replace(/[\\/]+$/, "");
+  const sep = root.includes("\\") ? "\\" : "/";
+  const absolute = /^([a-zA-Z]:)?[\\/]/.test(v);
+  $("output-full").textContent = !v || absolute || !root ? ""
+    : "Full path: " + root + sep + v.replace(/[\\/]+/g, sep);
+}
+$("output_dir").addEventListener("input", () => { if (setup) renderOutputFull(); });
+
+// A row of radio cards. Built once per wizard opening; a change only moves the
+// .selected class, because rebuilding the radios would drop keyboard focus in
+// the middle of arrow-key navigation.
+function radioCards(container, name, choices, current, onPick) {
+  container.replaceChildren(...choices.map(([key, label, help]) => {
+    const radio = el("input", { type: "radio", name, value: key, checked: key === current });
+    radio.addEventListener("change", () => { markSelected(container); onPick(key); });
+    return el("label", { class: "source" + (key === current ? " selected" : "") },
+      radio, el("strong", { text: label }), help ? el("small", { class: "muted", text: " " + help }) : null);
+  }));
+}
+function markSelected(container) {
+  container.querySelectorAll("label.source").forEach((l) => {
+    const r = l.querySelector("input");
+    l.classList.toggle("selected", !!(r && r.checked));
+  });
 }
 
 // ---- file names (organize.py holds the rules) ----
@@ -360,21 +630,21 @@ function renderLayout() {
     $("write_nfo").checked = cfg.write_nfo === true || (cfg.write_nfo == null && layoutChoice === "media_server");
     setup._layoutFilled = true;
   }
-  $("layouts").replaceChildren(...LAYOUT_CHOICES.map(([key, label, , help]) => {
-    const radio = el("input", { type: "radio", name: "layout", value: key, checked: key === layoutChoice });
-    radio.addEventListener("change", () => {
+  radioCards($("layouts"), "layout", LAYOUT_CHOICES.map(([key, label, , help]) => [key, label, help]),
+    layoutChoice, (key) => {
       layoutChoice = key;
       $("write_nfo").checked = key === "media_server";
-      renderLayout();
+      updateLayout();
     });
-    return el("label", { class: "source" + (key === layoutChoice ? " selected" : "") },
-      radio, el("strong", { text: label }), el("small", { class: "muted", text: " " + help }));
-  }));
+  updateLayout();
+}
+// The parts of the File names section that follow the choice and the inputs.
+function updateLayout() {
   $("template-field").hidden = layoutChoice !== "custom";
   $("name-preview").textContent = previewName(currentTemplate());
 }
-$("name_template").addEventListener("input", () => renderLayout());
-$("show").addEventListener("input", () => { if (setup) renderLayout(); });
+$("name_template").addEventListener("input", () => updateLayout());
+$("show").addEventListener("input", () => { if (setup) updateLayout(); });
 
 function collectLayout() {
   const out = { library_layout: layoutChoice, write_nfo: $("write_nfo").checked };
@@ -396,23 +666,23 @@ function renderQuality() {
   const v = rec.values || {};
   qualityChoice = qualityChoice && setup._qualityTouched ? qualityChoice : (rec.preset || "balanced");
   const choices = QUALITY_CHOICES.concat(rec.preset === "custom" ? [["custom", "Custom", "Your own values below."]] : []);
-  $("quality").replaceChildren(...choices.map(([key, label, help]) => {
-    const radio = el("input", { type: "radio", name: "quality", value: key, checked: key === qualityChoice });
-    radio.addEventListener("change", () => {
-      qualityChoice = key; setup._qualityTouched = true;
-      const p = (rec.presets || {})[key];
-      if (p) $("record_crf").value = p.record_crf;
-      renderQuality();
-    });
-    return el("label", { class: "source" + (key === qualityChoice ? " selected" : "") },
-      radio, el("strong", { text: label }), el("small", { class: "muted", text: " " + help }));
-  }));
+  radioCards($("quality"), "quality", choices, qualityChoice, (key) => {
+    qualityChoice = key; setup._qualityTouched = true;
+    const p = (rec.presets || {})[key];
+    if (p) $("record_crf").value = p.record_crf;
+  });
   if (!setup._qualityFilled) {
     $("record_crf").value = v.record_crf ?? 24;
     $("video_bitrate_kbps").value = v.video_bitrate_kbps ?? 2500;
     $("keyframe_seconds").value = v.keyframe_seconds ?? 2;
-    $("x264_preset").replaceChildren(...(rec.x264_presets || ["veryfast"]).map((p) =>
-      el("option", { value: p, text: p, selected: p === (v.x264_preset || "veryfast") })));
+    // A config value outside the known list (hand-edited, or from a newer
+    // playcap) is kept as an option, so saving does not quietly change it.
+    const current = v.x264_preset || "veryfast";
+    const presets = (Array.isArray(rec.x264_presets) && rec.x264_presets.length
+      ? rec.x264_presets : ["veryfast"]).slice();
+    if (!presets.includes(current)) presets.push(current);
+    $("x264_preset").replaceChildren(...presets.map((p) =>
+      el("option", { value: p, text: p, selected: p === current })));
     setup._qualityFilled = true;
   }
   $("quality-obs").textContent = rec.obs_in_sync
@@ -423,31 +693,43 @@ function renderQuality() {
 function collectQuality() {
   const out = {
     record_mode: qualityChoice === "bitrate" ? "bitrate" : "quality",
-    record_crf: Number($("record_crf").value),
-    video_bitrate_kbps: Number($("video_bitrate_kbps").value),
     x264_preset: $("x264_preset").value,
-    keyframe_seconds: Number($("keyframe_seconds").value),
   };
+  // An emptied number box is left out (the server keeps the saved value)
+  // rather than sent as Number("") === 0, which would fail or mislead.
+  for (const key of ["record_crf", "video_bitrate_kbps", "keyframe_seconds"]) {
+    const raw = $(key).value.trim();
+    if (raw !== "") out[key] = Number(raw);
+  }
   return out;
 }
 
 function renderTools() {
   $("tools").replaceChildren(...Object.entries(setup.tools).map(([name, t]) => {
+    t = t || {};
+    const label = TOOL_LABELS[name] || name;
     const input = el("input", { type: "text", id: "tool-" + name, spellcheck: "false",
-      placeholder: "not found — browse to it" });
+      placeholder: "not found — browse to it", "aria-label": label + " program path" });
     input.value = t.path || "";
+    const [what, url] = TOOL_HELP[name] || ["", ""];
+    const help = t.ok ? el("small", { class: "muted", text: "It " + what + "." })
+      : el("small", { class: "muted" }, `Not found. It ${what}. `,
+        el("a", { href: url, target: "_blank", rel: "noopener", text: "Download it" }),
+        ", install it, then press Browse… or reopen this page.");
     return el("div", { class: "tool" },
-      el("span", { class: "name", text: TOOL_LABELS[name] }),
+      el("span", { class: "name", text: label }),
       el("span", { class: "mark " + (t.ok ? "ok" : "bad"), text: t.ok ? "✓" : "✗" }),
-      el("div", {}, input, el("small", { class: "err", "data-err": TOOL_KEYS[name] })),
-      el("button", { class: "btn", "data-browse": "tool-" + name, "data-kind": "file", text: "Browse…" }));
+      el("div", {}, input, help, el("small", { class: "err", "data-err": TOOL_KEYS[name] })),
+      el("button", { class: "btn", "data-browse": "tool-" + name, "data-kind": "file",
+        "aria-label": "Browse for " + label, text: "Browse…" }));
   }));
 }
 
 function renderObsStatus() {
   const o = setup.obs;
+  const obsOk = !!(setup.tools.obs && setup.tools.obs.ok);
   let text;
-  if (!setup.tools.obs.ok) text = "OBS is not installed. Get it free from obsproject.com, then reopen this page.";
+  if (!obsOk) text = "OBS is not installed. Get it free from obsproject.com, then reopen this page.";
   else if (!o) text = "OBS has not been started with its websocket yet. Press Launch OBS — playcap turns it on.";
   else if (!o.enabled) text = setup.obs_running
     ? "OBS's websocket server is off. Close OBS, then press Launch OBS — playcap turns it on."
@@ -455,33 +737,43 @@ function renderObsStatus() {
   else text = setup.obs_running ? "OBS is running and reachable. Press “Set up recording scene” once."
     : "OBS is ready. Launch it, then press “Set up recording scene” once.";
   $("obs-status").textContent = text;
-  $("obs-launch").disabled = !setup.tools.obs.ok;
+  $("obs-launch").disabled = !obsOk;
 }
 
-$("obs-launch").onclick = () => act("/api/obs/launch", {}, () => setTimeout(async () => {
-  setup = await api("/api/setup"); renderObsStatus();
-}, 4000));
-$("obs-setup").onclick = () => act("/api/obs/setup", {});
+// Refresh only the OBS facts: the wizard's own fill-once flags (_layoutFilled,
+// _qualityFilled) live on `setup` and must survive.
+async function refreshObs() {
+  const fresh = await loadSetup();
+  Object.assign(setup, { tools: fresh.tools, obs: fresh.obs, obs_running: fresh.obs_running });
+  renderObsStatus();
+}
+$("obs-launch").onclick = () => act("/api/obs/launch", {}, () => setTimeout(refreshObs, 4000));
+$("obs-setup").onclick = () => act("/api/obs/setup", {}, refreshObs);
 
 function renderSources() {
-  $("sources").replaceChildren(...setup.adapters.map((a) => {
-    const radio = el("input", { type: "radio", name: "source", value: a.module,
-      checked: a.module === chosenSource });
-    const card = el("label", { class: "source" + (a.module === chosenSource ? " selected" : "") },
-      radio, el("strong", { text: a.label }));
-    radio.addEventListener("change", () => { chosenSource = a.module; renderSources(); });
-    return card;
-  }));
+  radioCards($("sources"), "source", setup.adapters.map((a) => [a.module, a.label, null]),
+    chosenSource, (key) => { chosenSource = key; renderSourceFields(); });
+  renderSourceFields();
+}
+
+// Only the fields under the radios follow the chosen source.
+function renderSourceFields() {
   const a = setup.adapters.find((x) => x.module === chosenSource);
   const cfg = setup.config || {};
-  $("source-fields").replaceChildren(...(a ? a.fields : []).map((f) => {
+  $("source-fields").replaceChildren(...(a && Array.isArray(a.fields) ? a.fields : []).map((f) => {
     const id = "field-" + f.key;
     const input = f.kind === "links"
       ? el("textarea", { id, spellcheck: "false", placeholder: "https://example.com/video-page\nIntro | https://example.com/another" })
       : el("input", { id, type: f.kind === "url" ? "url" : "text", spellcheck: "false" });
     input.value = f.kind === "links" ? (setup.links || "") : (cfg[f.key] || "");
+    // examples/demo/index.html ships with playcap; the links file is saved
+    // next to config.json and relative entries resolve against it, so this
+    // works when the UI was started from the playcap folder.
+    const demo = f.kind === "links" ? el("small", { class: "muted",
+      text: "Just trying playcap? Paste the line “Demo | examples/demo/index.html”: a six-second " +
+        "test pattern that ships with playcap. It works when the UI was started from the playcap folder." }) : null;
     return el("label", { class: "field" }, el("span", { text: f.label }), input,
-      f.help ? el("small", { class: "muted", text: f.help }) : null,
+      f.help ? el("small", { class: "muted", text: f.help }) : null, demo,
       el("small", { class: "err", "data-err": f.key }));
   }));
 }
@@ -505,7 +797,10 @@ function collect() {
   }
   out.adapter = chosenSource;
   const a = setup.adapters.find((x) => x.module === chosenSource);
-  for (const f of a ? a.fields : []) out[f.key] = $("field-" + f.key).value;
+  for (const f of a && Array.isArray(a.fields) ? a.fields : []) {
+    const input = $("field-" + f.key);
+    if (input) out[f.key] = input.value;
+  }
   out.output_dir = $("output_dir").value.trim();
   out.show = $("show").value.trim();
   Object.assign(out, collectQuality(), collectLayout());
@@ -516,17 +811,36 @@ const STEP_OF = { chrome_exe: 1, obs_exe: 1, ffmpeg: 1, ffprobe: 1, adapter: 2, 
   library_layout: 3, name_template: 3, write_nfo: 3,
   record_mode: 3, record_crf: 3, video_bitrate_kbps: 3, x264_preset: 3, keyframe_seconds: 3 };
 
+// Errors with no field of their own ("_file" for an unreadable config.json,
+// "adapter", keys the server refuses) are named here, so none goes unseen.
+const ERR_NAMES = { _file: "config.json", adapter: "Source" };
+
 async function finish() {
   document.querySelectorAll("[data-err]").forEach((e) => { e.textContent = ""; });
-  const r = await api("/api/config", collect());
+  clearBanner("save");
+  let r;
+  try {
+    r = await api("/api/config", collect());
+  } catch (e) {
+    toast("The playcap UI server is not responding.", false);
+    return;
+  }
   if (!r.ok) {
-    const errors = r.errors || {};
+    const errors = r.errors && typeof r.errors === "object" ? r.errors : {};
+    const loose = [];
     let first = 3;
     for (const [k, msg] of Object.entries(errors)) {
-      const slot = document.querySelector(`[data-err="${k}"]`);
-      if (slot) slot.textContent = msg;
+      const slot = [...document.querySelectorAll("[data-err]")].find((s) => s.dataset.err === k);
+      if (slot) {
+        slot.textContent = msg;
+        const panel = slot.closest("details");   // e.g. the collapsed Advanced quality panel
+        if (panel) panel.open = true;
+      } else {
+        loose.push(`${ERR_NAMES[k] || k}: ${msg}`);
+      }
       first = Math.min(first, STEP_OF[k] || 2);
     }
+    if (loose.length) showBanner("save", "Settings not saved. " + loose.join(" · "));
     if (!Object.keys(errors).length) toast(r.message || "Could not save settings.", false);
     showStep(first);
     return;
@@ -534,12 +848,22 @@ async function finish() {
   toast("Settings saved.");
   $("wizard").hidden = true;
   await refresh();
-  if (snap && snap.counts && snap.counts.total === 0) toast("Next: open the browser, log in if needed, then press Refresh queue.");
+  // A list of links needs no browser to read, so bring the queue in line with
+  // what was just saved rather than leaving the user to find "Refresh queue".
+  if (snap && snap.queue_offline && !isRunning("record") && !isRunning("queue")) job("start", "queue");
 }
+
+document.querySelectorAll(".stepper li").forEach((li) => {
+  const go = () => showStep(Number(li.dataset.step));
+  li.addEventListener("click", go);
+  li.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); }
+  });
+});
 
 $("wiz-next").onclick = () => (wizStep < 3 ? showStep(wizStep + 1) : finish());
 $("wiz-back").onclick = () => showStep(Math.max(1, wizStep - 1));
-$("wiz-cancel").onclick = () => { $("wizard").hidden = true; refresh(); };
+$("wiz-cancel").onclick = () => { $("wizard").hidden = true; clearBanner("save"); refresh(); };
 
 document.addEventListener("click", async (ev) => {
   const b = ev.target.closest("[data-browse]");
@@ -548,7 +872,14 @@ document.addEventListener("click", async (ev) => {
   b.disabled = true;
   try {
     const r = await api("/api/browse", { kind: b.dataset.kind });
-    if (r.path) $(b.dataset.browse).value = r.path;
+    if (r.path) {
+      $(b.dataset.browse).value = r.path;
+      if (b.dataset.browse === "output_dir") renderOutputFull();
+    } else if (r.ok === false && r.message) {
+      toast(r.message, false);
+    }
+  } catch (e) {
+    toast("The playcap UI server is not responding.", false);
   } finally {
     b.disabled = false;
   }

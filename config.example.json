@@ -7,7 +7,7 @@
   "browser_profile": "browser-profile",
 
   "obs_ws_url": "ws://127.0.0.1:4455",
-  "obs_password": "<obs-websocket password>",
+  "obs_password": "",
   "obs_exe": "C:/Program Files/obs-studio/bin/64bit/obs64.exe",
   "video_bitrate_kbps": 2500,
   "x264_settings": "keyint=60:min-keyint=60:scenecut=0",

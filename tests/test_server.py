@@ -299,3 +299,17 @@ def test_test_job_refused_while_recording(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "status", lambda root: st)
     ok, msg = server.job_action(tmp_path, "start", "test", item="abc")
     assert not ok and "Stop recording" in msg
+
+
+def test_open_library_uses_config_path_only(tmp_path, monkeypatch):
+    lib = tmp_path / "lib"
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"adapter": "playcap.adapters.html5_video", "output_dir": str(lib)}))
+    ok, msg = server.open_library(tmp_path)
+    assert not ok and "No recordings folder yet" in msg
+    lib.mkdir()
+    opened = []
+    monkeypatch.setattr(server.os, "startfile", opened.append, raising=False)
+    monkeypatch.setattr(server.subprocess, "Popen", lambda cmd: opened.append(cmd[-1]))
+    ok, msg = server.open_library(tmp_path)
+    assert ok and opened == [str(lib)]

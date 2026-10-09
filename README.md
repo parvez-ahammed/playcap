@@ -47,16 +47,27 @@ playcap is built for long, unattended runs:
 
 ## Requirements
 
-- Python 3.10+ and `pip install requests websocket-client` (or `pip install .`)
+- Python 3.10+
 - Google Chrome or Chromium
 - [OBS Studio](https://obsproject.com/) 28+ (the UI switches its WebSocket
   server on and creates a screen-capture scene for you)
 - ffmpeg and ffprobe
 
+## Install
+
+From the repo root:
+
+```
+pip install -e .
+```
+
+That installs the two dependencies (`requests`, `websocket-client`) and makes
+`python -m playcap...` and the `playcap` commands work from any folder,
+including `examples/demo`.
+
 ## Quick start: the UI
 
 ```
-pip install .            # or: pip install requests websocket-client
 playcap ui               # or: python -m playcap ui   (Windows: double-click playcap.bat)
 ```
 
@@ -68,40 +79,55 @@ asks for:
    (by editing OBS's own settings while it is closed) and *Set up recording
    scene* adds a full-screen capture scene.
 2. **What to record** -- paste page URLs, one per line (`Title | URL` also works).
-3. **Library** -- where recordings go and what the series is called.
+   To try playcap before pointing it at a real site, paste
+   `Demo | examples/demo/index.html`: a six-second test pattern that ships with
+   playcap. Relative paths resolve against the UI's folder (the `--root`
+   folder, by default the current folder), so start it from the repo root for
+   this one.
+3. **Library** -- where recordings go, what the library is called, how files
+   are named (a plain numbered folder, a media-server series layout with
+   `.nfo` files, or your own template) and the recording quality OBS uses.
 
 Then: *Open browser* (log in to your site in that window once -- playcap never
 handles passwords), *Refresh queue*, *Start recording*. *Stop after this one*
 finishes the item in flight; *Stop now* discards it and keeps it queued.
 *Re-compress library* (optional) re-encodes fixed-bitrate recordings; the
 recording quality itself is chosen in the wizard's Library step. Settings live in `config.json`
-in the folder you started the UI from; you never have to edit it.
+in the UI's folder (`--root`, by default the current folder); you never have to edit it.
 
 Jobs keep running if you close the UI; reopening it picks them up again.
 
 ## Quick start: command line (bundled demo, no real site)
 
 `examples/demo/` has a page that plays a six-second generated test pattern,
-plus a queue file and a config.
+plus a queue file and a config. After `pip install -e .` (see Install), every
+command reads `config.json` from the current folder:
 
 ```
 cd examples/demo
-python ../../build_queue.py           # reads queue.txt -> queue.json
-python ../../record_all.py --dry-run  # prints the plan, records nothing
+python -m playcap.build_queue             # reads queue.txt -> queue.json
+python -m playcap.recorder --dry-run      # prints the plan, records nothing
 ```
 
 To record it for real:
 
-1. Start the debug browser: `python -m playcap.browser` (run it from
+1. Set up OBS once. Either open the UI (`playcap ui`) and press *Launch OBS*
+   and *Set up recording scene* in the Tools step, or run
+   `python -m playcap.obs_setup`, which switches on OBS's websocket (OBS must
+   be closed for that part) and creates the screen-capture scene. You do not
+   need to copy OBS's websocket password anywhere: playcap reads it from OBS's
+   own settings.
+2. Start the debug browser: `python -m playcap.browser` (run it from
    `examples/demo`; it uses a dedicated profile in `browser-profile/`).
-2. Start OBS and set `obs_password` in `examples/demo/config.json`.
-3. Rehearse: `python -m playcap.tools.smoke_test "file:///.../examples/demo/index.html"`.
-   It records 25 seconds and checks that the captured frame is not black.
-4. `python ../../record_all.py`, then `python ../../optimize.py` and
-   `python ../../status.py`.
+3. Rehearse: `python -m playcap.tools.smoke_test "file:///.../examples/demo/index.html"`
+   (the full path to the file). It records 25 seconds and checks that the
+   captured frame is not black.
+4. `python -m playcap.recorder`, then `python -m playcap.optimize` and
+   `python -m playcap.status`.
 
-For your own queue, copy `config.example.json` to `config.json` at the repo
-root and point `queue_source` at a text file of URLs:
+For your own queue, copy `config.example.json` to `config.json` in a folder of
+your choice and point `queue_source` at a text file of URLs (relative paths
+in it resolve against that file):
 
 ```
 # one per line; "Title | url" is also accepted
@@ -111,21 +137,25 @@ Closing panel | https://example.org/talks/closing-panel
 
 ## Commands
 
+Run them from the folder that holds `config.json`.
+
 | Command | What it does |
 | --- | --- |
-| `python -m playcap.browser` | Launch Chrome with remote debugging on a dedicated profile |
-| `python build_queue.py` | Ask the adapter for the queue and save it |
-| `python record_all.py [--dry-run] [--limit N] [--speed 2] [--only KIND]` | Record the queue |
-| `python optimize.py [--verify] [--only TEXT] [--crf 24]` | Verified in-place re-encode |
-| `python organize.py [--dry-run]` | Re-file finished recordings under the current naming layout (and `.nfo` files if on) |
-| `python status.py [--watch]` | Write `status.html` |
-| `python -m playcap ui` (or `playcap ui`, `python control.py`) | The UI on http://127.0.0.1:8765 |
+| `python -m playcap ui [--port N] [--no-browser] [--root DIR]` (or `playcap ui`) | The UI on http://127.0.0.1:8765 |
+| `python -m playcap.obs_setup` | Switch on OBS's websocket (OBS closed) and create the capture scene |
+| `python -m playcap.browser` (or `playcap-browser`) | Launch Chrome with remote debugging on a dedicated profile |
+| `python -m playcap.build_queue` (or `playcap-queue`) | Ask the adapter for the queue and save it |
+| `python -m playcap.recorder [--dry-run] [--limit N] [--speed 2] [--only KIND]` (or `playcap-record`) | Record the queue |
+| `python -m playcap.optimize [--verify] [--only TEXT] [--crf 24]` (or `playcap-optimize`) | Verified in-place re-encode |
+| `python -m playcap.organize [--dry-run]` (or `playcap-organize`) | Re-file finished recordings under the current naming layout (and `.nfo` files if on) |
+| `python -m playcap.status [--watch]` (or `playcap-status`) | Write `status.html` |
 | `python -m playcap.tools.smoke_test URL` | Rehearse one page end to end |
 | `python -m playcap.tools.inspect_live` | Show what the `<video>` in each open tab reports |
 | `python -m playcap.tools.probe URL` | Log how a page delivers its video |
 
-The root-level scripts are thin wrappers around `playcap.*`; `python -m
-playcap.recorder` and the others work the same way.
+The repo root also keeps the old entry points (`python build_queue.py`,
+`record_all.py`, `optimize.py`, `organize.py`, `status.py`, `control.py`) as
+thin wrappers around the same modules.
 
 ## Writing an adapter
 

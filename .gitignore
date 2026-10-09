@@ -41,3 +41,12 @@ CLAUDE.local.md
 # Packaging build output
 build/
 *.egg-info/
+
+# Stop flags and runtime state written by the UI and jobs
+.playcap/
+
+# Dated backups of run state (lectures.json.bak-YYYY-MM-DD etc.)
+*.bak-*
+
+# Scratch scripts
+.pc_helper.py

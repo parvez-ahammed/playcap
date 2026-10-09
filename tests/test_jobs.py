@@ -20,7 +20,7 @@ def no_external(monkeypatch):
 def test_job_running_elsewhere_blocks_start(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "external", lambda max_age=15: {"optimize": [4242]})
     ok, msg = jobs.start("record", tmp_path, {}, cmd=SLEEPER)
-    assert not ok and "optimize" in msg
+    assert not ok and "Re-compressing" in msg
     ok, msg = jobs.start("optimize", tmp_path, {}, cmd=SLEEPER)
     assert not ok and "outside" in msg
 
@@ -80,7 +80,7 @@ def test_record_and_optimize_are_exclusive(tmp_path):
     assert ok
     try:
         ok, msg = jobs.start("record", tmp_path, {}, cmd=SLEEPER)
-        assert not ok and "optimize" in msg
+        assert not ok and "Re-compressing" in msg
     finally:
         jobs.kill("optimize", tmp_path)
 

@@ -132,6 +132,7 @@ def read_queue_source(path):
 class Adapter(Base):
     config_defaults = {"queue_source": "queue.txt"}
     label = "List of links"
+    queue_needs_browser = False      # the queue is the pasted list itself
     setup_fields = [{
         "key": "links", "kind": "links",
         "label": "Pages to record, one per line",

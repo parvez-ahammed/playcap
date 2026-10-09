@@ -75,15 +75,25 @@ class Obs:
             raise ObsError(f"OBS refused identify (wrong password?): {reply}")
 
     def request(self, request_type, data=None, timeout=20):
+        """Socket trouble (OBS crashed, closed, hung) comes out as ObsError too,
+        so callers' cleanup -- which catches ObsError -- always runs."""
         self.req_n += 1
         req_id = f"r{self.req_n}"
-        self.ws.send(json.dumps({"op": 6, "d": {
-            "requestType": request_type, "requestId": req_id,
-            "requestData": data or {}}}))
+        try:
+            self.ws.send(json.dumps({"op": 6, "d": {
+                "requestType": request_type, "requestId": req_id,
+                "requestData": data or {}}}))
+        except (websocket.WebSocketException, OSError) as exc:
+            raise ObsError(f"{request_type}: lost the connection to OBS ({exc})") from exc
         deadline = time.time() + timeout
         while time.time() < deadline:
             self.ws.settimeout(max(0.2, deadline - time.time()))
-            msg = self._recv()
+            try:
+                msg = self._recv()
+            except websocket.WebSocketTimeoutException:
+                continue
+            except (websocket.WebSocketException, OSError, ValueError) as exc:
+                raise ObsError(f"{request_type}: lost the connection to OBS ({exc})") from exc
             if msg.get("op") == 7 and msg["d"]["requestId"] == req_id:
                 status = msg["d"]["requestStatus"]
                 if not status["result"]:
@@ -99,10 +109,21 @@ class Obs:
     def record_status(self):
         return self.request("GetRecordStatus")
 
-    def start_record(self):
+    def start_record(self, confirm_seconds=10):
+        """Start recording and wait until OBS says the output is live.
+        StartRecord answers before the output starts, and an output that cannot
+        start (a bad folder, a broken encoder) fails silently -- found only
+        when StopRecord at the end of a multi-hour item said "not running"."""
         if self.record_status()["outputActive"]:
             raise ObsError("OBS is already recording; refusing to start another.")
         self.request("StartRecord")
+        deadline = time.time() + confirm_seconds
+        while time.time() < deadline:
+            if self.record_status().get("outputActive"):
+                return
+            time.sleep(0.5)
+        raise ObsError("OBS accepted StartRecord but is not recording -- check its "
+                       "recording folder and encoder (Settings -> Output)")
 
     def stop_record(self):
         """Returns the path OBS wrote."""

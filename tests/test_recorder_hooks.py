@@ -129,3 +129,11 @@ def test_move_file_falls_back_to_copy_across_drives(tmp_path, monkeypatch):
     monkeypatch.setattr(recorder.time, "sleep", lambda s: None)
     assert recorder.move_file(src, dst) is True
     assert dst.read_bytes() == b"x" and not src.exists()
+
+
+def test_now_says_which_item_of_the_run(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(recorder, "RUN_PLACE", (2, 7))
+    recorder.write_now(Item(id="1", title="T", url="u"), {"t": 1}, 10.0)
+    data = json.loads((tmp_path / ".playcap" / "now.json").read_text())
+    assert (data["n"], data["of"]) == (2, 7)

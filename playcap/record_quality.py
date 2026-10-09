@@ -154,7 +154,8 @@ def current(env, platform):
     except (OSError, ValueError):
         pass
     return {"mode": ini_get(text, "Output", "Mode") or "Simple",
-            "rec_encoder": ini_get(text, "AdvOut", "RecEncoder"), "encoder": enc}
+            "rec_encoder": ini_get(text, "AdvOut", "RecEncoder"), "encoder": enc,
+            "rec_path": ini_get(text, "AdvOut", "RecFilePath")}
 
 
 def in_sync(cfg, env, platform):
@@ -163,8 +164,11 @@ def in_sync(cfg, env, platform):
         return False
     want = encoder_json(cfg)
     enc = cur["encoder"] or {}
+    # An earlier playcap wrote a relative recording folder, which OBS resolves
+    # against its own program folder; treat that as out of sync so it is fixed.
+    path_ok = not cur.get("rec_path") or Path(cur["rec_path"]).is_absolute()
     return (cur["mode"] == "Advanced" and cur["rec_encoder"] == "obs_x264"
-            and all(enc.get(k) == v for k, v in want.items()))
+            and all(enc.get(k) == v for k, v in want.items()) and path_ok)
 
 
 def apply(cfg, env, platform, obs_running):
@@ -186,7 +190,11 @@ def apply(cfg, env, platform, obs_running):
             shutil.copy2(f, bak)
     # Carry the simple-mode output folder, container and audio bitrate over,
     # so switching modes changes only the video encoding.
-    folder = (cfg.get("output_dir") or ini_get(text, "SimpleOutput", "FilePath")
+    # OBS runs from its own folder, so a relative path would land there (or
+    # fail): hand it the absolute folder, resolved against playcap's.
+    out = cfg.get("output_dir")
+    out = str(Path(out).resolve()) if out else None
+    folder = (out or ini_get(text, "SimpleOutput", "FilePath")
               or ini_get(text, "AdvOut", "RecFilePath") or "")
     fmt = ini_get(text, "SimpleOutput", "RecFormat2") or "mkv"
     for key, value in (("RecEncoder", "obs_x264"), ("RecType", "Standard"),
