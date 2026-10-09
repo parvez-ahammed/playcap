@@ -7,9 +7,10 @@ git checkout and no site of your own. examples/demo/ in a checkout reuses the
 same video.
 
     folder(root)                  <root>/playcap-demo
-    needs(root)                   tools the demo cannot run without (chrome, obs)
+    plan(root)                    (capture backend, tools still missing)
+    needs(root)                   tools the demo cannot run without
     prepare(root)                 copy the page, write the demo config + queue
-    start(root, launch_obs, setup_obs)   one click: browser, OBS, record
+    start(root, launch_obs, setup_obs)   one click: browser, (OBS,) record
     stop(root)                    cancel the setup or stop the demo recording
     status(root)                  what the Try-it-now panel shows
 
@@ -21,13 +22,24 @@ PLAYCAP_CONFIG=<root>/playcap-demo/config.json (see playcap.config), whose
 queue, progress file and recordings folder are absolute paths inside
 playcap-demo/. The user's own config.json, queue, progress.json and library
 are never read or written. Settings the user already chose that describe the
-machine (Chrome/OBS paths, debug port, browser profile, OBS websocket) are
-carried over, so the demo uses the same browser and OBS a real run would.
+machine (Chrome/OBS/ffmpeg paths, debug port, browser profile, OBS websocket,
+ffmpeg capture settings) are carried over, so the demo uses the same browser
+and screen recorder a real run would.
+
+Which screen recorder (playcap.capture). The demo must work on a machine
+with only Chrome and ffmpeg, so it does not assume OBS: a user who picked
+"capture_backend": "ffmpeg" gets ffmpeg; otherwise OBS when it is installed
+(the default backend, and the one a real run would use); otherwise ffmpeg
+when its build can actually grab the screen (detect.capture_backends: ddagrab
+or gdigrab plus an H.264 encoder). With ffmpeg the demo needs only Chrome and
+ffmpeg, writes "capture_backend": "ffmpeg" into the demo config, and skips the
+OBS launch and scene setup entirely. With neither, it asks for OBS (the
+default) and names ffmpeg as the alternative.
 
 Every Try it now starts a fresh demo progress file (only the demo's own), so
 the button always records again; finalize() numbers repeats "(2)", "(3)".
 
-Setup (opening the browser, starting and configuring OBS) takes a few
+Setup (opening the browser; with OBS, starting and configuring it) takes a few
 seconds of polling, so start() runs it in a background thread and reports
 phases through <root>/.playcap/demo.json. The thread only calls the same
 functions the UI's buttons do (server.obs_action is passed in as
@@ -50,9 +62,12 @@ DATA = Path(__file__).resolve().parent
 FILES = ("index.html", "test-video.mp4", "queue.txt")
 DIR_NAME = "playcap-demo"
 STATE = "demo.json"
-NEEDED = ("chrome", "obs")       # ffmpeg only remuxes; without it the file stays .mkv
+# Per backend. With OBS, ffmpeg only remuxes (without it the file stays .mkv).
+NEEDED = {"obs": ("chrome", "obs"), "ffmpeg": ("chrome", "ffmpeg")}
+NAMES = {"chrome": "Chrome", "obs": "OBS", "ffmpeg": "ffmpeg"}
 CARRY = ("chrome_exe", "obs_exe", "chrome_debug_port", "browser_profile",
-         "obs_ws_url", "obs_password")
+         "obs_ws_url", "obs_password", "ffmpeg", "ffprobe",
+         "capture_grabber", "capture_encoder", "capture_audio", "capture_fps")
 BROWSER_WAIT_S = 30
 SETUP_TRIES = 3
 
@@ -83,13 +98,38 @@ def _set_state(root, **kw):
     return data
 
 
+def _ffmpeg_capture_ok(user_cfg):
+    """Can this machine's ffmpeg record the screen (not merely: is it installed)?"""
+    try:
+        return bool(detect.capture_backends(user_cfg)["ffmpeg"]["ok"])
+    except Exception:
+        return False
+
+
+def choose_backend(user_cfg, report):
+    """The user's explicit ffmpeg choice; else OBS if installed; else ffmpeg
+    if it can capture; else OBS (what the UI then asks to install)."""
+    if user_cfg.get("capture_backend") == "ffmpeg":
+        return "ffmpeg"
+    if (report.get("obs") or {}).get("ok"):
+        return "obs"
+    return "ffmpeg" if _ffmpeg_capture_ok(user_cfg) else "obs"
+
+
+def plan(root, report=None, user_cfg=None):
+    """-> (backend, [tools the demo cannot run without that are missing])."""
+    user_cfg = settings.read(root) if user_cfg is None else user_cfg
+    report = report if report is not None else detect.report(user_cfg)
+    backend = choose_backend(user_cfg, report)
+    return backend, [t for t in NEEDED[backend] if not (report.get(t) or {}).get("ok")]
+
+
 def needs(root, report=None):
     """Tools the demo cannot run without that are not installed."""
-    report = report if report is not None else detect.report(settings.read(root))
-    return [t for t in NEEDED if not (report.get(t) or {}).get("ok")]
+    return plan(root, report)[1]
 
 
-def config_for(root, user_cfg=None):
+def config_for(root, user_cfg=None, backend="obs"):
     user_cfg = settings.read(root) if user_cfg is None else user_cfg
     d = folder(root).resolve()
     cfg = {
@@ -103,12 +143,15 @@ def config_for(root, user_cfg=None):
         "library_layout": "folder",
         "write_nfo": False,
         "avg_item_minutes": 1,
+        "capture_backend": backend,
     }
     for key in CARRY:
         if user_cfg.get(key) not in (None, ""):
             cfg[key] = user_cfg[key]
-    # The recorder restarts OBS itself only when it knows where OBS is.
-    for tool, key in (("obs", "obs_exe"), ("chrome", "chrome_exe")):
+    # The recorder restarts OBS itself only when it knows where OBS is, and
+    # runs ffmpeg from the path it is given (config's default is a bare "ffmpeg").
+    for tool, key in (("obs", "obs_exe"), ("chrome", "chrome_exe"),
+                      ("ffmpeg", "ffmpeg"), ("ffprobe", "ffprobe")):
         if not cfg.get(key):
             found = detect.resolve(tool, user_cfg)
             if found:
@@ -116,10 +159,12 @@ def config_for(root, user_cfg=None):
     return cfg
 
 
-def prepare(root):
+def prepare(root, backend=None):
     """Copy the page into <root>/playcap-demo/page and write the demo's own
     config, queue and a fresh progress file. -> (config path, cfg)."""
     from playcap.adapters.html5_video import read_queue_source
+    if backend is None:
+        backend = plan(root)[0]
     d = folder(root)
     page = d / "page"
     page.mkdir(parents=True, exist_ok=True)
@@ -127,7 +172,7 @@ def prepare(root):
         src, dst = DATA / name, page / name
         if not dst.exists() or dst.stat().st_size != src.stat().st_size:
             shutil.copyfile(src, dst)
-    cfg = config_for(root)
+    cfg = config_for(root, backend=backend)
     cfg_path = d / "config.json"
     settings.atomic_write_json(cfg_path, cfg)
     settings.atomic_write_json(Path(cfg["queue_file"]), read_queue_source(page / "queue.txt"))
@@ -159,14 +204,16 @@ def start(root, launch_obs, setup_obs, port_open=_port_open, background=True):
         t = _run["thread"]
         if t and t.is_alive():
             return False, "The demo is already starting."
-        missing = needs(root)
+        backend, missing = plan(root)
         if missing:
-            names = " and ".join({"chrome": "Chrome", "obs": "OBS"}[m] for m in missing)
-            return False, f"The demo needs {names}. Install it first."
+            names = " and ".join(NAMES[m] for m in missing)
+            alt = (" (or ffmpeg, which records the screen without OBS)"
+                   if "obs" in missing else "")
+            return False, f"The demo needs {names}{alt}. Install it first."
         busy = _busy_reason(root)
         if busy:
             return False, busy
-        cfg_path, cfg = prepare(root)
+        cfg_path, cfg = prepare(root, backend)
         _run["cancel"] = threading.Event()
         _set_state(root, phase="starting", message="Getting ready…", record_pid=None,
                    started=time.time(), error=None)
@@ -177,6 +224,8 @@ def start(root, launch_obs, setup_obs, port_open=_port_open, background=True):
         t = threading.Thread(target=_setup, args=args, daemon=True, name="playcap-demo")
         _run["thread"] = t
         t.start()
+    if backend == "ffmpeg":
+        return True, "Setting up the demo: browser, then a 6-second recording with ffmpeg."
     return True, "Setting up the demo: browser, then OBS, then a 6-second recording."
 
 
@@ -208,20 +257,21 @@ def _setup(root, cfg_path, cfg, launch_obs, setup_obs, port_open, cancel):
                 return fail("The browser did not open. See the Browser log.")
         if cancelled():
             return
-        if not obs_setup.is_obs_running():
-            _set_state(root, phase="obs", message="Starting OBS…")
-            ok, msg = launch_obs()
-            if not ok:
+        if cfg.get("capture_backend") != "ffmpeg":     # ffmpeg: the recorder starts it
+            if not obs_setup.is_obs_running():
+                _set_state(root, phase="obs", message="Starting OBS…")
+                ok, msg = launch_obs()
+                if not ok:
+                    return fail(msg)
+            _set_state(root, phase="obs", message="Setting up OBS's recording scene…")
+            for attempt in range(SETUP_TRIES):
+                if cancelled():
+                    return
+                ok, msg = setup_obs()
+                if ok:
+                    break
+            else:
                 return fail(msg)
-        _set_state(root, phase="obs", message="Setting up OBS's recording scene…")
-        for attempt in range(SETUP_TRIES):
-            if cancelled():
-                return
-            ok, msg = setup_obs()
-            if ok:
-                break
-        else:
-            return fail(msg)
         if cancelled():
             return
         _set_state(root, phase="recording", message="Recording the demo…")
@@ -268,9 +318,10 @@ def status(root, report=None):
     setting_up = bool(t and t.is_alive())
     rec = jobs.status(root)["record"]
     recording = bool(rec["running"] and s.get("record_pid") and rec["pid"] == s.get("record_pid"))
+    backend, missing = plan(root, report)
     out = {"phase": phase, "message": s.get("message") or "", "running": setting_up or recording,
            "file": None, "error": None, "folder": str(folder(root).resolve() / "recordings"),
-           "needs": needs(root, report), "now": None}
+           "needs": missing, "backend": backend, "now": None}
     if phase == "recording" and not recording and not setting_up:
         file, error = _result(root)
         if file:

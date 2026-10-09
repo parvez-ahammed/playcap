@@ -936,14 +936,19 @@ document.addEventListener("click", async (ev) => {
 
 // ---------------------------------------------------------------- try it now + installs
 // A first run starts with the bundled demo (playcap.demo): one button sets up
-// the browser and OBS and records six seconds into <root>/playcap-demo. Missing
-// tools get an "Install with winget" button where winget exists (playcap.install;
-// the request names the tool, never a command), else the download link.
+// the browser (and OBS, unless the demo records with ffmpeg: demo.choose_backend)
+// and records six seconds into <root>/playcap-demo. Missing tools get an
+// "Install with winget" button where winget exists (playcap.install; the request
+// names the tool, never a command), else the download link.
 let demoInfo = null;
 let installInfo = null;
 let installWasRunning = false;
 let demoWasRunning = false;
-const NEED_TEXT = { chrome: "Chrome plays the video page.", obs: "OBS records the screen." };
+const NEED_TEXT = {
+  chrome: "Chrome plays the video page.",
+  obs: "OBS records the screen. ffmpeg alone works too: install either one.",
+  ffmpeg: "ffmpeg records the screen (it is the screen recorder chosen in Settings).",
+};
 
 function tryItWanted() {
   if (!snap) return false;

@@ -27,6 +27,8 @@ def wait_until(pred, timeout=10):
 def quiet(monkeypatch):
     monkeypatch.setattr(jobs, "external", lambda max_age=15: {})
     monkeypatch.setattr(install, "_cache", {})
+    # The demo's backend choice must not depend on this machine's ffmpeg.
+    monkeypatch.setattr(demo, "_ffmpeg_capture_ok", lambda cfg: False)
 
 
 IDLE = {"running": False, "pid": None, "started": None, "stopping": False, "stopping_after": False}
@@ -62,13 +64,14 @@ def test_prepare_keeps_the_demo_apart_from_the_real_setup(tmp_path, monkeypatch)
     real = {"output_dir": "lib", "chrome_debug_port": 9333, "queue_file": "queue.json"}
     (tmp_path / "config.json").write_text(json.dumps(real))
     (tmp_path / "progress.json").write_text('{"x": {"status": "done"}}')
-    cfg_path, cfg = demo.prepare(tmp_path)
+    cfg_path, cfg = demo.prepare(tmp_path, "obs")
     d = (tmp_path / "playcap-demo").resolve()
     assert cfg_path == tmp_path / "playcap-demo" / "config.json"
     for key in ("queue_file", "progress_file", "output_dir", "optimize_state"):
         assert Path(cfg[key]).is_absolute() and Path(cfg[key]).parent == d
     assert cfg["chrome_debug_port"] == 9333               # machine settings carry over
     assert cfg["obs_exe"] == "C:/fake/obs.exe"
+    assert cfg["capture_backend"] == "obs"
     assert json.loads((tmp_path / "config.json").read_text()) == real   # untouched
     assert json.loads((tmp_path / "progress.json").read_text()) == {"x": {"status": "done"}}
     assert (d / "page" / "test-video.mp4").is_file()
@@ -136,7 +139,45 @@ def test_start_refuses_without_obs(tmp_path, monkeypatch):
     started = []
     _fake_jobs(monkeypatch, started)
     ok, msg = demo.start(tmp_path, None, None, background=False)
-    assert not ok and "OBS" in msg and not started
+    assert not ok and "OBS" in msg and "ffmpeg" in msg and not started
+
+
+def test_demo_records_with_ffmpeg_when_obs_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(demo.detect, "report", lambda cfg: {
+        "chrome": {"ok": True}, "obs": {"ok": False}, "ffmpeg": {"ok": True}})
+    monkeypatch.setattr(demo.detect, "resolve", lambda tool, cfg: f"C:/fake/{tool}.exe"
+                        if tool != "obs" else None)
+    monkeypatch.setattr(demo, "_ffmpeg_capture_ok", lambda cfg: True)
+    from playcap import obs_setup
+    monkeypatch.setattr(obs_setup, "is_obs_running",
+                        lambda: pytest.fail("the ffmpeg demo must not look for OBS"))
+    started, calls = [], []
+    _fake_jobs(monkeypatch, started)
+    ok, msg = demo.start(tmp_path, lambda: calls.append("launch") or (True, ""),
+                         lambda: calls.append("setup") or (True, ""),
+                         port_open=lambda p: True, background=False)
+    assert ok
+    assert [n for n, _ in started] == ["record"] and calls == []       # no OBS steps
+    cfg = json.loads((tmp_path / "playcap-demo" / "config.json").read_text())
+    assert cfg["capture_backend"] == "ffmpeg" and cfg["ffmpeg"] == "C:/fake/ffmpeg.exe"
+    st = demo.status(tmp_path, report={"chrome": {"ok": True}, "ffmpeg": {"ok": True}})
+    assert st["backend"] == "ffmpeg" and st["needs"] == [] and st["phase"] == "recording"
+
+
+def test_demo_backend_choice():
+    report = {"chrome": {"ok": True}, "obs": {"ok": True}, "ffmpeg": {"ok": False}}
+    assert demo.choose_backend({}, report) == "obs"
+    assert demo.choose_backend({"capture_backend": "ffmpeg"}, report) == "ffmpeg"
+    assert demo.choose_backend({}, {"obs": {"ok": False}}) == "obs"   # neither: ask for OBS
+
+
+def test_demo_needs_follow_the_chosen_backend(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"capture_backend": "ffmpeg"}))
+    report = {"chrome": {"ok": True}, "obs": {"ok": True}, "ffmpeg": {"ok": False}}
+    assert demo.plan(tmp_path, report) == ("ffmpeg", ["ffmpeg"])
+    (tmp_path / "config.json").write_text(json.dumps({"capture_backend": "obs"}))
+    assert demo.plan(tmp_path, {"chrome": {"ok": False}, "obs": {"ok": False}}) == (
+        "obs", ["chrome", "obs"])
 
 
 def test_start_refuses_while_recording(tmp_path, monkeypatch):
@@ -166,7 +207,7 @@ def test_obs_setup_failure_is_reported_and_nothing_records(tmp_path, monkeypatch
 def test_status_reads_the_demo_result(tmp_path, monkeypatch):
     monkeypatch.setattr(demo.detect, "resolve", lambda tool, cfg: None)
     monkeypatch.setattr(jobs, "status", lambda root: {n: dict(IDLE) for n in jobs.NAMES})
-    _, cfg = demo.prepare(tmp_path)
+    _, cfg = demo.prepare(tmp_path, "obs")
     demo._set_state(tmp_path, phase="recording", record_pid=4242)
     Path(cfg["progress_file"]).write_text(json.dumps(
         {"abc": {"status": "done", "file": "C:/x/01 - Demo.mp4", "title": "Demo"}}))
