@@ -1,0 +1,50 @@
+{
+    "##": [
+        "DRAFT, not submitted. See packaging/README.md.",
+        "Installs the portable zip. persist keeps the data folder (config, queue,",
+        "recordings) across scoop updates. Before submitting, replace hash with the",
+        "value from playcap-<version>-windows-x64.zip.sha256 on the release, or run",
+        "`scoop checkver playcap -u` / `checkver.ps1 -Update` to fill it."
+    ],
+    "version": "0.1.0",
+    "description": "Open-source browser DVR: records web video with OBS until the video ends.",
+    "homepage": "https://github.com/parvez-ahammed/playcap",
+    "license": "GPL-3.0-or-later",
+    "notes": [
+        "Settings, queue and recordings are kept in $persist_dir\\data.",
+        "playcap also needs Chrome, OBS Studio 28+ and ffmpeg: scoop install ffmpeg"
+    ],
+    "suggest": {
+        "ffmpeg": "main/ffmpeg",
+        "OBS Studio": "extras/obs-studio"
+    },
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/parvez-ahammed/playcap/releases/download/v0.1.0/playcap-0.1.0-windows-x64.zip",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "extract_dir": "playcap-0.1.0-windows-x64"
+        }
+    },
+    "bin": "playcap.bat",
+    "shortcuts": [
+        [
+            "playcap.bat",
+            "playcap"
+        ]
+    ],
+    "persist": "data",
+    "checkver": {
+        "github": "https://github.com/parvez-ahammed/playcap"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/parvez-ahammed/playcap/releases/download/v$version/playcap-$version-windows-x64.zip",
+                "hash": {
+                    "url": "$url.sha256"
+                },
+                "extract_dir": "playcap-$version-windows-x64"
+            }
+        }
+    }
+}

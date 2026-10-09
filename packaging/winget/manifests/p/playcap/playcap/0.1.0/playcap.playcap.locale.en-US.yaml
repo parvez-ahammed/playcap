@@ -1,0 +1,27 @@
+# DRAFT, not submitted. See packaging/README.md, step 4.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+PackageIdentifier: playcap.playcap
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: playcap contributors
+PublisherUrl: https://github.com/parvez-ahammed/playcap
+PublisherSupportUrl: https://github.com/parvez-ahammed/playcap/issues
+PackageName: playcap
+PackageUrl: https://github.com/parvez-ahammed/playcap
+License: GPL-3.0-or-later
+LicenseUrl: https://github.com/parvez-ahammed/playcap/blob/main/LICENSE
+ShortDescription: Open-source browser DVR that records web video with OBS until the video ends.
+Description: |-
+  playcap opens each page in a queue in your own Chrome, starts playback,
+  records the screen with OBS Studio until the page's video ends, and files
+  the results as a verified, compressed media library. It does not decrypt
+  DRM or bypass access controls.
+Moniker: playcap
+Tags:
+  - dvr
+  - obs
+  - screen-recorder
+  - video
+ReleaseNotesUrl: https://github.com/parvez-ahammed/playcap/releases/tag/v0.1.0
+ManifestType: defaultLocale
+ManifestVersion: 1.10.0

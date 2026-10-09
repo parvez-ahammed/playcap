@@ -1,0 +1,20 @@
+# Runtime dependencies baked into the portable Windows build, pinned with the
+# SHA256 of the exact wheel pip picks for CPython 3.14 / win_amd64. Each hash
+# was checked against PyPI's published digest. build_portable.py installs these
+# with --require-hashes, so a swapped or tampered wheel fails the build.
+#
+# To update: bump a version, then take the new wheel's sha256 from
+# https://pypi.org/project/<name>/<version>/#files (the win_amd64 cp314 wheel
+# for charset-normalizer, the py3-none-any wheel for the rest).
+requests==2.34.2 \
+    --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0
+websocket-client==1.9.2 \
+    --hash=sha256:e1a673830a9c7bfa47b1cd3d5e4178f4c9651d80a4eab02c9c23a1c3ec6250ce
+certifi==2026.7.22 \
+    --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775
+charset-normalizer==3.5.2 \
+    --hash=sha256:e4e81e09c1578b8df602e3db08b0b3ea0a6947ad612f52bf8dc5ea8d47691f0c
+idna==3.20 \
+    --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+urllib3==2.8.0 \
+    --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
