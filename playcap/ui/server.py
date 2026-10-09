@@ -25,6 +25,13 @@ browser and record jobs; playcap.demo explains how it stays apart from the
 real queue and library. /api/install runs winget for one tool named from a
 fixed allowlist (playcap.install); the request never carries a command or
 package id. Both go through the same Host/token/Origin/JSON guards.
+
+Recipes: GET /api/recipes lists them; POST /api/recipes/{save,import,delete}
+and /api/teach/{start,read,stop} go through the same guards as every other
+POST. Import takes the file's text, not a path, and playcap.recipes refuses
+anything that is not a well-formed recipe. Export happens in the page (the
+recipe is already there as JSON), so no endpoint ever writes outside
+config.json.
 """
 import argparse
 import json
@@ -39,11 +46,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from playcap import detect, jobs, obs_setup, record_quality, settings, state
+from playcap import detect, jobs, obs_setup, record_quality, recipes, settings, state, teach
 from playcap import demo, firstrun, install
 
 HERE = Path(__file__).resolve().parent
 STATIC = {"app.js": "application/javascript; charset=utf-8",
+          "recipes.js": "application/javascript; charset=utf-8",
           "style.css": "text/css; charset=utf-8"}
 MAX_BODY = 1 << 20
 DEFAULT_PORT = 8765
@@ -329,6 +337,37 @@ def open_library(root):
     return True, f"Opened {lib}"
 
 
+def recipe_action(root, path, body):
+    """Recipes (playcap.recipes) and the page picker (playcap.teach). Every
+    recipe that arrives here -- saved from the form or imported from a shared
+    file -- is validated strictly before it touches config.json."""
+    action = path.rsplit("/", 1)[1]
+    if path.startswith("/api/teach/"):
+        if action == "start":
+            ok, msg = teach.start(root, str(body.get("url") or ""))
+            return {"ok": ok, "message": msg}
+        if action == "read":
+            return teach.read(root)
+        if action == "stop":
+            ok, msg = teach.stop(root)
+            return {"ok": ok, "message": msg}
+    elif action == "save":
+        replace = body.get("replace")
+        ok, msg = recipes.upsert(root, body.get("recipe"),
+                                 replace if isinstance(replace, str) else None)
+        return {"ok": ok, "message": msg}
+    elif action == "import":
+        text = body.get("text")
+        if not isinstance(text, str):
+            return {"ok": False, "message": "Expected the file's text."}
+        ok, msg = recipes.import_text(root, text)
+        return {"ok": ok, "message": msg}
+    elif action == "delete":
+        ok, msg = recipes.delete(root, str(body.get("name") or ""))
+        return {"ok": ok, "message": msg}
+    return {"ok": False, "message": "Unknown action."}
+
+
 def browse(kind):
     try:
         out = subprocess.run([sys.executable, "-c", BROWSE_JS, kind],
@@ -427,6 +466,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, demo.status(self.root))
             if path == "/api/install":
                 return self._send(200, install.status(self.root))
+            if path == "/api/recipes":
+                return self._send(200, {"recipes": recipes.load_all(self.root)})
             return self._send(404, {"ok": False, "message": "not found"})
         except Exception as exc:          # never let one bad file kill the page
             return self._send(500, {"ok": False, "message": f"{exc.__class__.__name__}: {exc}"})
@@ -474,6 +515,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/install":
                 ok, msg = install.start(self.root, str(body.get("tool", "")))
                 return self._send(200, {"ok": ok, "message": msg})
+            if path.startswith(("/api/recipes/", "/api/teach/")):
+                return self._send(200, recipe_action(self.root, path, body))
             return self._send(404, {"ok": False, "message": "not found"})
         except Exception as exc:
             return self._send(500, {"ok": False, "message": f"{exc.__class__.__name__}: {exc}"})

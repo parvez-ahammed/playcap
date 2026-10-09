@@ -1,0 +1,8 @@
+{
+  "playcap_recipe": 1,
+  "name": "JW Player",
+  "description": "Pages that embed JW Player directly (not inside an iframe): fullscreens the player and presses its display icon.",
+  "match": {"url": "*", "page_has": ".jwplayer video"},
+  "player": ".jwplayer",
+  "play_button": ".jwplayer .jw-icon-display"
+}

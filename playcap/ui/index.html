@@ -226,6 +226,69 @@
       </div>
     </div>
 
+    <!-- Recipes: teach playcap a page without writing an adapter (recipes.js). -->
+    <div id="recipes-card" class="card">
+      <div class="card-head">
+        <h3>Recipes</h3>
+        <div class="row">
+          <button id="teach-open" class="btn small">Teach playcap a page</button>
+          <label class="btn small" for="recipe-import">Import…</label>
+          <input id="recipe-import" type="file" accept=".json,application/json" hidden>
+        </div>
+      </div>
+      <p class="muted small">A recipe tells playcap which element on a page is the video player, what to
+        click to start it, and which links on an index page lead to the videos. Without one, playcap
+        picks the largest video on the page.</p>
+      <div id="teach" hidden>
+        <h4>1. Point at the page</h4>
+        <div class="row wrap">
+          <input id="teach-url" type="url" spellcheck="false" placeholder="https://… (empty: the tab that is open now)">
+          <button id="teach-start" class="btn small">Open picker</button>
+          <button id="teach-read" class="btn small primary">Use my picks</button>
+          <button id="teach-stop" class="btn small ghost">Close picker</button>
+        </div>
+        <p class="muted small">A bar appears at the top of the playcap browser window. Choose
+          <b>Video player</b> and click the video; optionally <b>Play button</b>; on an index page,
+          <b>Item links</b> and click two or three of the video links. Then press <b>Use my picks</b>.
+          You can pick on an index page, press Use my picks, open a video page in the same tab and pick again.</p>
+        <h4>2. Check the recipe</h4>
+        <div class="advgrid">
+          <label class="field"><span>Recipe name</span><input id="rf-name" type="text"></label>
+          <label class="field"><span>Use on pages whose address matches <small class="muted">* = anything; re: for a regex</small></span>
+            <input id="rf-match" type="text" spellcheck="false"></label>
+          <label class="field"><span>Video player (CSS selector)</span><input id="rf-player" type="text" spellcheck="false"></label>
+          <label class="field"><span>Play button <small class="muted">optional</small></span><input id="rf-play" type="text" spellcheck="false"></label>
+          <label class="field"><span>Only when the page has <small class="muted">optional CSS selector</small></span>
+            <input id="rf-has" type="text" spellcheck="false"></label>
+        </div>
+        <h4>Index page <small class="muted">optional: build the queue from a page of links</small></h4>
+        <div class="advgrid">
+          <label class="field"><span>Index page address <small class="muted">* = anything</small></span>
+            <input id="rf-cpage" type="text" spellcheck="false"></label>
+          <label class="field"><span>Item links (CSS selector)</span><input id="rf-links" type="text" spellcheck="false"></label>
+          <label class="field"><span>Keep link addresses matching <small class="muted">optional regex</small></span>
+            <input id="rf-regex" type="text" spellcheck="false"></label>
+          <label class="field"><span>Title inside each item <small class="muted">optional CSS selector</small></span>
+            <input id="rf-title" type="text" spellcheck="false"></label>
+          <label class="field"><span>Next page button <small class="muted">optional CSS selector</small></span>
+            <input id="rf-next" type="text" spellcheck="false"></label>
+          <label class="field"><span>Read at most this many pages</span>
+            <input id="rf-pages" type="number" min="1" max="50" value="5"></label>
+        </div>
+        <label class="check"><input id="rf-reverse" type="checkbox"> The index lists newest first (number the oldest as 1)</label>
+        <ul id="teach-preview" class="muted small"></ul>
+        <div class="row wrap">
+          <button id="recipe-save" class="btn primary small">Save recipe</button>
+          <button id="recipe-add-collect" class="btn small" hidden>Add this index page to my list</button>
+          <button id="teach-cancel" class="btn small ghost">Cancel</button>
+        </div>
+      </div>
+      <table class="list">
+        <tbody id="recipe-body"></tbody>
+      </table>
+      <p id="recipe-empty" class="muted small" hidden>No recipes yet. Ready-made ones for common players are in the recipes folder that ships with playcap.</p>
+    </div>
+
     <!-- Always reachable, even before any job has run: the raw logs are the
          first thing to look at when "What happened" has nothing to say. -->
     <div class="card">
@@ -239,5 +302,6 @@
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
 <script src="/static/app.js"></script>
+<script src="/static/recipes.js"></script>
 </body>
 </html>

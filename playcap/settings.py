@@ -28,6 +28,10 @@ capture_audio, capture_fps) are checked by capture.validate.
 
 The "links" pseudo-key belongs to the generic adapter: the pasted lines are
 written to queue.txt next to config.json and queue_source points at it.
+
+The "recipes" list in config.json is not a UI_KEYS setting: playcap.recipes
+writes it through its own validated read-modify-write, and save() keeps it
+like any other key it was not given.
 """
 import json
 import os
@@ -147,7 +151,11 @@ def read_links(root, cfg):
 def _link_ok(line, root):
     """A web address, a file:// URL, or a file that exists next to the list.
     "www.site.com/talk" without a scheme would otherwise turn into a local path
-    and fail much later with a confusing error."""
+    and fail much later with a confusing error. "collect: URL" (an index page a
+    recipe reads; see html5_video) must be a web address."""
+    if line.lower().startswith("collect:"):
+        line = line[len("collect:"):].strip()
+        return "://" in line and line.split("://", 1)[0].lower() in ("http", "https", "file")
     if "://" in line:
         return line.split("://", 1)[0].lower() in ("http", "https", "file")
     p = Path(line)

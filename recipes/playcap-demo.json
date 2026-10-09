@@ -1,0 +1,7 @@
+{
+  "playcap_recipe": 1,
+  "name": "playcap demo page",
+  "description": "The test-pattern page in examples/demo: a plain HTML5 video. The smallest useful recipe, to copy from.",
+  "match": {"url": "re:/examples/demo/index\\.html$", "page_has": "main video"},
+  "player": "main video"
+}

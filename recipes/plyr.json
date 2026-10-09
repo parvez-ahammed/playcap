@@ -1,0 +1,8 @@
+{
+  "playcap_recipe": 1,
+  "name": "Plyr player",
+  "description": "Any page built with the open-source Plyr player in HTML5 video mode: fullscreens the player and presses its centre play button.",
+  "match": {"url": "*", "page_has": ".plyr video"},
+  "player": ".plyr",
+  "play_button": ".plyr .plyr__control--overlaid"
+}
