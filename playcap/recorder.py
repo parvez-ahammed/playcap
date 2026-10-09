@@ -396,10 +396,13 @@ def preflight(obs, seconds=PREFLIGHT_SECONDS):
 
 
 def start_playback(sess, player, rect):
-    """Click the player centre until currentTime actually advances."""
+    """Click the player centre until currentTime actually advances. An adapter
+    may name a better spot (rect["click"] = [x, y], e.g. a recipe's play
+    button); it is still a trusted CDP click, never a JS .click()."""
     wait_playable(player)
+    x, y = rect.get("click") or (rect["x"] + rect["w"] / 2, rect["y"] + rect["h"] / 2)
     for attempt in range(3):
-        sess.click(rect["x"] + rect["w"] / 2, rect["y"] + rect["h"] / 2)
+        sess.click(x, y)
         time.sleep(4)
         st = state(player)
         if st.get("found") and st["t"] > 0.1 and not st["paused"]:

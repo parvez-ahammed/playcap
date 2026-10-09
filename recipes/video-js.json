@@ -1,0 +1,8 @@
+{
+  "playcap_recipe": 1,
+  "name": "Video.js player",
+  "description": "Any page built with the open-source Video.js player: fullscreens the player and presses its big play button.",
+  "match": {"url": "*", "page_has": ".video-js video"},
+  "player": ".video-js",
+  "play_button": ".video-js .vjs-big-play-button"
+}
