@@ -4,6 +4,7 @@
     resolve(name, cfg)       a configured path when it still exists, else find_tool
     obs_websocket()          OBS's own websocket settings (url, password, enabled)
     report(cfg)              what the setup wizard shows: {name: {path, ok}}
+    capture_backends(cfg)    which capture backends (OBS, ffmpeg) can record here
 
 Where it looks: the standard per-machine and per-user install folders on
 Windows, the usual app bundles on macOS, then PATH. Everything that touches
@@ -155,3 +156,11 @@ def report(cfg, env=None, which=shutil.which):
         path = resolve(name, cfg, env=env, which=which)
         out[name] = {"path": path, "ok": bool(path)}
     return out
+
+
+def capture_backends(cfg):
+    """{"backend", "obs": {ok}, "ffmpeg": {ok, grabber, encoders, audio_devices,
+    loopback, why}}. OBS is usable when installed; ffmpeg when its build can
+    grab the screen (ddagrab, else gdigrab) and encode H.264. See capture.py."""
+    from playcap import capture
+    return capture.report(cfg or {})

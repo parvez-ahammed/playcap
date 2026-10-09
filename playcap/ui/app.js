@@ -556,6 +556,7 @@ async function openWizard(cancellable) {
   setup = await loadSetup();
   renderTools();
   renderObsStatus();
+  renderCapture();
   const cfg = setup.config || {};
   chosenSource = cfg.adapter || (setup.adapters[0] && setup.adapters[0].module);
   renderSources();
@@ -747,6 +748,51 @@ async function refreshObs() {
   Object.assign(setup, { tools: fresh.tools, obs: fresh.obs, obs_running: fresh.obs_running });
   renderObsStatus();
 }
+// ---- screen recorder (capture.py holds the rules; detect.capture_backends reports) ----
+let captureChoice = null;
+
+function renderCapture() {
+  const c = setup.capture || {};
+  const ff = c.ffmpeg || {};
+  const cfg = setup.config || {};
+  if (!setup._captureFilled) captureChoice = cfg.capture_backend || c.backend || "obs";
+  const ffHelp = ff.ok
+    ? `No OBS needed. Captures with ${ff.grabber}${ff.why ? " (" + ff.why + ")" : ""}.`
+    : "Not usable here: " + (ff.why || "ffmpeg was not checked.");
+  radioCards($("capture"), "capture", [
+    ["obs", "OBS", "Recommended. Records the screen and the computer's sound."],
+    ["ffmpeg", "ffmpeg only", ffHelp],
+  ], captureChoice, (key) => { captureChoice = key; renderCaptureDetails(); });
+  if (!setup._captureFilled) {
+    // auto, none, then every sound device ffmpeg lists; a saved device name
+    // that is not plugged in right now is kept, so saving does not drop it.
+    const current = cfg.capture_audio || "auto";
+    const devices = Array.isArray(ff.audio_devices) ? ff.audio_devices : [];
+    const opts = [["auto", ff.loopback ? `Automatic (${ff.loopback})` : "Automatic (none found: picture only)"],
+      ["none", "No sound"], ...devices.map((d) => [d, d])];
+    if (!opts.some(([v]) => v === current)) opts.push([current, current]);
+    $("capture_audio").replaceChildren(...opts.map(([v, t]) =>
+      el("option", { value: v, text: t, selected: v === current })));
+    setup._captureFilled = true;
+  }
+  renderCaptureDetails();
+}
+
+function renderCaptureDetails() {
+  const ff = (setup.capture || {}).ffmpeg || {};
+  $("capture-audio-field").hidden = captureChoice !== "ffmpeg";
+  $("capture-status").textContent = captureChoice !== "ffmpeg" ? ""
+    : (ff.ok ? `ffmpeg can record here (${ff.grabber}; encoders: ${(ff.encoders || []).join(", ") || "none"}).`
+      : "ffmpeg cannot record here: " + (ff.why || "unknown reason") + " Pick OBS, or install a newer ffmpeg.");
+}
+
+function collectCapture() {
+  const out = { capture_backend: captureChoice || "obs" };
+  const audio = $("capture_audio").value;
+  if (audio) out.capture_audio = audio;
+  return out;
+}
+
 $("obs-launch").onclick = () => act("/api/obs/launch", {}, () => setTimeout(refreshObs, 4000));
 $("obs-setup").onclick = () => act("/api/obs/setup", {}, refreshObs);
 
@@ -803,13 +849,14 @@ function collect() {
   }
   out.output_dir = $("output_dir").value.trim();
   out.show = $("show").value.trim();
-  Object.assign(out, collectQuality(), collectLayout());
+  Object.assign(out, collectQuality(), collectLayout(), collectCapture());
   return out;
 }
 
 const STEP_OF = { chrome_exe: 1, obs_exe: 1, ffmpeg: 1, ffprobe: 1, adapter: 2, output_dir: 3, show: 3,
   library_layout: 3, name_template: 3, write_nfo: 3,
-  record_mode: 3, record_crf: 3, video_bitrate_kbps: 3, x264_preset: 3, keyframe_seconds: 3 };
+  record_mode: 3, record_crf: 3, video_bitrate_kbps: 3, x264_preset: 3, keyframe_seconds: 3,
+  capture_backend: 1, capture_audio: 1 };
 
 // Errors with no field of their own ("_file" for an unreadable config.json,
 // "adapter", keys the server refuses) are named here, so none goes unseen.

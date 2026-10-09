@@ -43,6 +43,19 @@
           <button id="obs-setup" class="btn">Set up recording scene</button>
         </div>
       </div>
+      <h3 class="qhead">Screen recorder</h3>
+      <p class="muted small">Which program records the screen. OBS is the default: mature, and it records the
+        computer's sound on its own. "ffmpeg only" needs no OBS, but it can record sound only from a sound
+        device that carries what the speakers play (Stereo Mix, virtual-audio-capturer or a virtual audio
+        cable); without one it records the picture only. Either way playcap checks that the capture is not black.</p>
+      <div id="capture" class="sources" role="radiogroup"></div>
+      <small class="err" data-err="capture_backend"></small>
+      <label class="field" id="capture-audio-field" hidden>
+        <span>Sound <small class="muted">(ffmpeg only)</small></span>
+        <select id="capture_audio"></select>
+        <small class="err" data-err="capture_audio"></small>
+      </label>
+      <p id="capture-status" class="muted small"></p>
     </div>
 
     <div class="card step" data-step="2" hidden>

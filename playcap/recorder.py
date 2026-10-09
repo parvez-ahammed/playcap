@@ -46,6 +46,14 @@ is -- RUN_PLACE, so the UI can say "item 2 of 7"). A stop-now flag is checked
 every second, also during retry and cooldown waits, and raises
 KeyboardInterrupt so the normal cleanup runs; a stop-after-current flag is
 checked between items. CTRL_BREAK is mapped to KeyboardInterrupt too.
+
+Capture backend (playcap.capture): config "capture_backend" is "obs" (default)
+or "ffmpeg". The OBS path is unchanged and still talks to obs_client.Obs
+directly. With "ffmpeg" the `obs` variable below holds a capture.FfmpegCapture,
+which answers the same start_record / stop_record / record_status calls; aiming
+and brightness go through capture.aim / capture.luma, and capture.check raises
+if ffmpeg died mid-item (OBS dying already surfaces through its websocket).
+Fullscreen-before-recording and every black-frame rule apply to both.
 """
 import argparse
 import json
@@ -57,7 +65,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from playcap import cdp, config, jobs, obs_setup, organize, record_quality, screen
+from playcap import capture, cdp, config, jobs, obs_setup, organize, record_quality, screen
 from playcap.settings import atomic_write_json
 from playcap.adapters.base import VIDEO_STATE_JS, CaptureBlocked, ItemFailed  # noqa: F401
 from playcap.obs_client import Obs, ObsError
@@ -149,7 +157,7 @@ class BlackWatch:
 
 def program_luma(obs):
     try:
-        return obs.screenshot_luma(obs.current_scene())
+        return capture.luma(obs)
     except Exception:
         return None
 
@@ -444,12 +452,15 @@ def record_one(item, index, obs, speed, args):
         v = player.video
 
         # Make sure OBS is looking at this browser before anything is played.
-        moved = screen.aim_capture(obs, screen.window_bounds(sess))
+        moved = capture.aim(obs, screen.window_bounds(sess))
         if moved:
             print(f"    {moved}")
         pin.__enter__()
         if pin.note:
             print(f"    {pin.note}")
+        moved = capture.aim_window(obs, pin.hwnd)     # ffmpeg only: exact monitor
+        if moved:
+            print(f"    {moved}")
         preflight(obs)
 
         st = start_playback(sess, player, rect)
@@ -581,6 +592,7 @@ def record_one(item, index, obs, speed, args):
             mins = (time.time() - t_started) / 60
             print(f"    t={s['t']:.0f}/{duration:.0f}s  ({mins:.1f} min elapsed)",
                   flush=True)
+            capture.check(obs)            # ffmpeg died mid-item -> retry
             luma = program_luma(obs)
             write_now(item, s, duration, luma, t_started)
             dark_for = black.update(luma, time.time())
@@ -782,9 +794,17 @@ def main(argv=None):
         return
 
     outdir().mkdir(parents=True, exist_ok=True)
-    obs = wait_ready(connect_obs())
-    apply_output_settings(obs)
-    report_quality()
+    if capture.backend_name(CFG) == "ffmpeg":
+        try:
+            obs = capture.FfmpegCapture(CFG, outdir(), state_dir=jobs.STATE_DIR)
+        except ObsError as exc:
+            sys.exit(f"ffmpeg capture is not usable: {exc}")
+        print(f"recording with {obs.describe()}")
+        print(f"recording quality: {record_quality.describe(CFG)}")
+    else:
+        obs = wait_ready(connect_obs())
+        apply_output_settings(obs)
+        report_quality()
 
     global RUN_PLACE
     consecutive = 0
