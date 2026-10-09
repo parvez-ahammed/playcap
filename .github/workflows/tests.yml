@@ -18,3 +18,20 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[test]"
       - run: python -m pytest tests -q
+
+  # Capture is Windows-first; these runs report how far the pure-Python parts
+  # get elsewhere without blocking a merge. See ROADMAP.md (macOS/Linux).
+  pytest-other-os:
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[test]"
+      - run: python -m pytest tests -q

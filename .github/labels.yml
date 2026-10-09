@@ -1,0 +1,12 @@
+# Labels used by the issue templates. Create them once with:
+#   gh label create <name> --color <color> --description "<description>" --force
+- {name: bug, color: d73a4a, description: Something is broken}
+- {name: needs-triage, color: fbca04, description: Not looked at yet}
+- {name: site-support, color: 1d76db, description: A player or page that does not record}
+- {name: enhancement, color: a2eeef, description: New feature or improvement}
+- {name: good first issue, color: 7057ff, description: Small and well-scoped; a good place to start}
+- {name: help wanted, color: 008672, description: Maintainer would welcome a PR}
+- {name: rights-holder, color: b60205, description: Rights holder concern; answered first}
+- {name: out-of-scope, color: cfd3d7, description: Against RESPONSIBLE_USE.md}
+- {name: platform-macos, color: c5def5, description: macOS support}
+- {name: platform-linux, color: c5def5, description: Linux support}

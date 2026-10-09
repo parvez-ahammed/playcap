@@ -3,7 +3,7 @@
 Flow per item: navigate -> aim OBS at the browser's monitor, pin the
 browser window on top, check OBS is not already black (playcap.screen) ->
 click the player (a CDP click is a trusted gesture,
-which is what starts DRM-protected and gesture-gated playback; a synthetic JS
+which is what starts gesture-gated playback; a synthetic JS
 .click() does not) -> fullscreen the player element so the video renders at
 its native resolution instead of the page's player box -> OBS records the
 screen -> poll the <video> until it ends -> stop, file it under the library
@@ -477,7 +477,7 @@ def record_one(item, index, obs, speed, args):
         if not gesture(sess, ADAPTER.fullscreen_js(rect)):
             raise ItemFailed("fullscreen failed")
         time.sleep(4)
-        # Some players (YouTube) pick their quality from the player size, so
+        # Some players pick their quality from the player size, so
         # the resolution that matters is the one after going fullscreen.
         fs = state(player)
         print(f"    recording at {fs['w']}x{fs['h']}")

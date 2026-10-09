@@ -1,0 +1,39 @@
+name: A page doesn't record
+description: playcap can't find, start or follow the video on a page
+labels: ["site-support", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        playcap records what is on screen. Video protected by hardware DRM records
+        **black by design**, and requests to get around that will be closed and
+        locked. Please describe the *player*, not the site: we do not accept
+        adapters or recipes for paid streaming or course platforms.
+  - type: input
+    id: player
+    attributes:
+      label: Player type
+      description: "e.g. plain HTML5 <video>, Video.js, JW Player, Plyr, an embedded iframe player, a self-hosted Jellyfin page"
+    validations:
+      required: true
+  - type: textarea
+    id: smoke
+    attributes:
+      label: Smoke-test output
+      description: "Output of `python -m playcap.tools.smoke_test <url>` (replace the URL with <redacted> if it is private)."
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: inspect
+    attributes:
+      label: inspect_live output
+      description: "Output of `python -m playcap.tools.inspect_live` while the page is open and playing."
+      render: text
+  - type: checkboxes
+    id: rights
+    attributes:
+      label: Responsible use
+      options:
+        - label: I am entitled to keep a copy of the video I'm trying to record
+          required: true

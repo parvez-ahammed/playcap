@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/parvez-ahammed/playcap/discussions
+    about: Ask how to do something, share a recipe, or show your setup.
+  - name: Responsible use
+    url: https://github.com/parvez-ahammed/playcap/blob/main/RESPONSIBLE_USE.md
+    about: What playcap will and will not do. Requests to get around DRM are closed.

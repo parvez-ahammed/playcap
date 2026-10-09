@@ -40,6 +40,7 @@ CLAUDE.local.md
 
 # Packaging build output
 build/
+dist/
 *.egg-info/
 
 # Stop flags and runtime state written by the UI and jobs
@@ -50,3 +51,7 @@ build/
 
 # Scratch scripts
 .pc_helper.py
+
+# Private launch research (not part of the project)
+research_notes/
+reports/

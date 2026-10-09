@@ -57,7 +57,6 @@ Closing panel | https://example.org/talks/closing-panel
 | `python -m playcap.status [--watch]` (or `playcap-status`) | Write `status.html` |
 | `python -m playcap.tools.smoke_test URL` | Rehearse one page end to end |
 | `python -m playcap.tools.inspect_live` | Show what the `<video>` in each open tab reports |
-| `python -m playcap.tools.probe URL` | Log how a page delivers its video |
 
 The repo root also keeps the old entry points (`python build_queue.py`,
 `record_all.py`, `optimize.py`, `organize.py`, `status.py`, `control.py`) as

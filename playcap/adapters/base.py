@@ -17,8 +17,8 @@ Queue entries stay in whatever shape the adapter wrote them (so existing state
 files keep working); item() maps them onto the few fields the core reads.
 
 Why the recorder clicks instead of calling video.play(): CDP input events are
-trusted user gestures, and some players (DRM ones especially) only start on a
-real gesture. Why fullscreen: otherwise the capture is the page's player box,
+trusted user gestures, and some players only start on a real gesture. Why
+fullscreen: otherwise the capture is the page's player box,
 not the video's native resolution. Adapters decide *which* element; the core
 decides *when*.
 

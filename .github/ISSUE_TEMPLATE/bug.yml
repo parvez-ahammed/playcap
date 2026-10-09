@@ -1,0 +1,40 @@
+name: Bug report
+description: playcap crashed, stalled, or recorded the wrong thing
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not name or link paid streaming or course
+        platforms here; see [RESPONSIBLE_USE.md](../blob/main/RESPONSIBLE_USE.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what playcap did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log output
+      description: The last ~50 lines of `record_run.log` (or the UI's job log). Remove personal URLs.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: playcap version
+      placeholder: "playcap --version, or the commit hash"
+  - type: input
+    id: env
+    attributes:
+      label: OS, Chrome, OBS and ffmpeg versions
+      placeholder: "Windows 11 24H2, Chrome 141, OBS 31.1, ffmpeg 7.1"
+    validations:
+      required: true
+  - type: checkboxes
+    id: demo
+    attributes:
+      label: Demo check
+      options:
+        - label: The bundled demo (test-pattern page) records correctly on this machine

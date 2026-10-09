@@ -1,0 +1,20 @@
+name: Rights holder concern
+description: You hold rights to content and believe playcap is being promoted or used to infringe them
+labels: ["rights-holder"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        These are answered before anything else. If you would rather not post in
+        public, use [private reporting](../security/advisories/new) instead.
+  - type: textarea
+    id: concern
+    attributes:
+      label: Your concern
+      description: Which file, issue, discussion or post, and why.
+    validations:
+      required: true
+  - type: input
+    id: contact
+    attributes:
+      label: How to reach you

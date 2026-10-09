@@ -31,7 +31,9 @@ playcap/                 generic core. No site names anywhere in it.
   record_quality.py      recording encoder (CRF/CBR) presets; written into OBS's profile while OBS is closed
   screen.py              aims OBS at the browser's monitor, pins the browser window on top (Windows)
   control.py             old entry point, now opens the UI
-  tools/                 smoke_test, inspect_live, probe (generic diagnostics)
+  tools/                 smoke_test, inspect_live (generic diagnostics). No network or
+                         DRM-API instrumentation in the public tree: it reads as intent
+                         to circumvent (see RESPONSIBLE_USE.md).
 record_all.py build_queue.py optimize.py organize.py status.py control.py
                          thin root wrappers so the old commands still work
 examples/demo/           test-pattern page + queue + config. Try playcap with no real site.

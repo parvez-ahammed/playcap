@@ -3,7 +3,8 @@
 Enough to drive a real logged-in Chrome: find targets (including cross-origin
 iframes such as an embedded video player), run JS inside them, and dispatch input
 events. CDP input events are treated as genuine user gestures, which is what
-lets us start DRM playback and enter fullscreen programmatically.
+lets us press play on players that refuse script-started playback, and enter
+fullscreen programmatically. Nothing here touches the media stream itself.
 """
 import json
 import time
