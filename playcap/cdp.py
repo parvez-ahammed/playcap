@@ -54,16 +54,26 @@ def open_page(url, tries=20, delay=0.5):
     A newly launched debug Chrome has nothing but a blank tab, so find() comes
     back empty and the caller would blow up on target["webSocketDebuggerUrl"].
     Chrome 111+ only accepts PUT on /json/new.
+
+    /json/new answers with the new target itself, so that is what is returned.
+    Looking the tab up again by URL or host is wrong: a file:// URL has an
+    empty host, which matches whatever tab /json/list happens to list first,
+    and two tabs on one site are indistinguishable. Only if the answer carries
+    no debugger URL is the new tab looked up in /json/list -- by its target id.
     """
     try:
-        requests.put(f"{CDP_HTTP}/json/new?{url}", timeout=10)
+        r = requests.put(f"{CDP_HTTP}/json/new?{url}", timeout=10)
+        new = r.json()
     except Exception as exc:
         raise CdpError(f"could not open a tab on {url}: {exc}") from exc
-    host = url.split("//", 1)[-1].split("/", 1)[0]
+    if not isinstance(new, dict) or not new.get("id"):
+        raise CdpError(f"opening a tab on {url} returned no target: {str(new)[:120]}")
+    if new.get("webSocketDebuggerUrl"):
+        return new
     for _ in range(tries):
-        t = find(host, kinds=("page",))
-        if t:
-            return t
+        for t in targets(("page",)):
+            if t.get("id") == new["id"] and t.get("webSocketDebuggerUrl"):
+                return t
         time.sleep(delay)
     raise CdpError(f"opened a tab on {url} but it never appeared in /json/list")
 

@@ -245,20 +245,6 @@ def _drop():
     sess.close()
 
 
-def _open(url):
-    """A new tab on url. /json/new answers with the new target itself; using
-    that (rather than cdp.open_page's look-up by host) matters for file://
-    pages, whose empty host would match whatever tab happens to be first."""
-    import requests
-    try:
-        t = requests.put(f"{cdp.CDP_HTTP}/json/new?{url}", timeout=10).json()
-        if isinstance(t, dict) and t.get("webSocketDebuggerUrl"):
-            return t
-    except Exception:
-        pass
-    return cdp.open_page(url)
-
-
 def start(root, url=""):
     url = (url or "").strip()
     if url and not re.match(r"^(https?|file)://", url, re.I):
@@ -268,7 +254,7 @@ def start(root, url=""):
         _port(root)
         try:
             if url:
-                target = _open(url)
+                target = cdp.open_page(url)
             else:
                 pages = [t for t in cdp.targets(("page",))
                          if not t["url"].startswith(("devtools://", "chrome-extension://"))]
