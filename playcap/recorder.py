@@ -46,6 +46,15 @@ is -- RUN_PLACE, so the UI can say "item 2 of 7"). A stop-now flag is checked
 every second, also during retry and cooldown waits, and raises
 KeyboardInterrupt so the normal cleanup runs; a stop-after-current flag is
 checked between items. CTRL_BREAK is mapped to KeyboardInterrupt too.
+
+Notifications and media-server refresh (playcap.notify, all optional, from
+config.json): each finished item sends "recorded" and asks the media server to
+rescan (debounced), a final failure sends "failed", a capture-blocked or black
+capture sends "blocked", and the end of a run -- finished, stopped or exited
+early -- sends "finished" with the counts, after a last refresh. Every send
+runs on its own thread with a short timeout and swallows its own errors, so a
+dead webhook can never cost an item or hold the run up; the end of the run
+waits at most notify.FLUSH_SECONDS for the last messages.
 """
 import argparse
 import json
@@ -57,7 +66,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from playcap import cdp, config, jobs, obs_setup, organize, record_quality, screen
+from playcap import cdp, config, jobs, notify, obs_setup, organize, record_quality, screen
 from playcap.settings import atomic_write_json
 from playcap.adapters.base import VIDEO_STATE_JS, CaptureBlocked, ItemFailed  # noqa: F401
 from playcap.obs_client import Obs, ObsError
@@ -89,6 +98,14 @@ NOW_FILE = Path(jobs.STATE_DIR) / "now.json"
 CFG = {}
 ADAPTER = None
 RUN_PLACE = (None, None)     # (this item's number in the run, items in the run)
+LAST_DURATION = None         # the last recorded video's length (s), for the notification
+
+
+def black_failure(msg):
+    """An ItemFailed that notifications report as a black/blocked capture."""
+    exc = ItemFailed(msg)
+    exc.black = True
+    return exc
 
 
 def write_now(item, s, duration, luma=None, started=None):
@@ -391,8 +408,8 @@ def preflight(obs, seconds=PREFLIGHT_SECONDS):
         if luma is None or luma >= BLACK_LUMA:
             return luma
         nap(1)
-    raise ItemFailed(f"OBS output is black before recording (brightness {luma:.1f}); "
-                     "check the capture source in OBS")
+    raise black_failure(f"OBS output is black before recording (brightness {luma:.1f}); "
+                        "check the capture source in OBS")
 
 
 def start_playback(sess, player, rect):
@@ -410,6 +427,7 @@ def start_playback(sess, player, rect):
 
 
 def record_one(item, index, obs, speed, args):
+    global LAST_DURATION
     print(f"\n=== [{index}] {item.day} {item.time} "
           f"[{item.kind}] {item.title[:70]}")
 
@@ -592,10 +610,11 @@ def record_one(item, index, obs, speed, args):
                     f"capture-blocked: the video is black to screen capture for "
                     f"{dark_for:.0f}s while it plays (protected player)")
             if dark_for > BLACK_ABORT_SECONDS:
-                raise ItemFailed(f"capture has been black for over {BLACK_ABORT_SECONDS}s "
-                                 "(OBS capturing the wrong/no monitor, or DRM)")
+                raise black_failure(f"capture has been black for over {BLACK_ABORT_SECONDS}s "
+                                    "(OBS capturing the wrong/no monitor, or DRM)")
 
         path = obs.stop_record()
+        LAST_DURATION = duration / speed
         time.sleep(2)
         return finalize(path, item, index)
     finally:
@@ -714,6 +733,20 @@ def finalize(path, item, index):
     return str(dst), size
 
 
+def run_end(alerts, refresher, ran):
+    """Last library refresh + the "finished" message, then a bounded wait for
+    both. A run that did nothing (a scheduled re-scan with nothing new) sends
+    nothing. Never raises: it runs in main()'s finally."""
+    try:
+        refresher.finish()
+        if ran["recorded"] or ran["failed"] or ran["blocked"] or ran["stopped"] or ran["note"]:
+            alerts.send("finished", **ran)
+        alerts.flush()
+        refresher.flush()
+    except Exception as exc:
+        print(f"    notifications: {exc.__class__.__name__}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="all",
@@ -788,6 +821,8 @@ def main(argv=None):
 
     global RUN_PLACE
     consecutive = 0
+    alerts, refresher = notify.Notifier(CFG), notify.LibraryRefresher(CFG)
+    ran = {"recorded": 0, "failed": 0, "blocked": 0, "stopped": False, "note": ""}
     try:
         for place, (index, it) in enumerate(todo, 1):
             RUN_PLACE = (place, len(todo))
@@ -805,6 +840,10 @@ def main(argv=None):
                         "status": "done", "file": path, "gb": round(size, 2),
                         "title": it.title}
                     consecutive = 0
+                    ran["recorded"] += 1
+                    alerts.send("recorded", title=it.title, duration=LAST_DURATION,
+                                file=path, gb=round(size, 2))
+                    refresher.item_filed()
                     break
                 except (ItemFailed, cdp.CdpError, Exception) as exc:
                     label = ("skipped" if isinstance(exc, ItemFailed)
@@ -822,6 +861,8 @@ def main(argv=None):
                             pass
                         progress[it.id] = {"status": "failed", "title": it.title,
                                            "error": f"CaptureBlocked: {exc}"[:300]}
+                        ran["blocked"] += 1
+                        alerts.send("blocked", title=it.title, reason=str(exc))
                         break
                     if isinstance(exc, cdp.CdpError):
                         ensure_chrome()
@@ -843,6 +884,13 @@ def main(argv=None):
                         "status": "failed", "title": it.title,
                         "error": f"{exc.__class__.__name__}: {exc}"[:300]}
                     consecutive += 1
+                    if getattr(exc, "black", False):
+                        ran["blocked"] += 1
+                        alerts.send("blocked", title=it.title, reason=str(exc))
+                    else:
+                        ran["failed"] += 1
+                        alerts.send("failed", title=it.title,
+                                    reason=f"{exc.__class__.__name__}: {exc}")
             save_progress(progress)
 
             if consecutive >= COOLDOWN_AFTER:
@@ -853,7 +901,11 @@ def main(argv=None):
                 if place < len(todo):        # nothing left: no point waiting
                     nap(COOLDOWN_SECONDS, after_current=True)
                 consecutive = 0
+    except SystemExit as exc:
+        ran["note"] = str(exc.code) if exc.code not in (None, 0) else ""
+        raise
     except KeyboardInterrupt:
+        ran["stopped"] = True
         print("\ninterrupted -- stopping the recording cleanly")
         try:
             if obs.record_status()["outputActive"]:
@@ -865,6 +917,7 @@ def main(argv=None):
         obs.close()
         clear_now()
         jobs.clear_flags(Path.cwd(), "record")
+        run_end(alerts, refresher, ran)
 
     done = sum(1 for v in progress.values() if v["status"] == "done")
     failed = [v for v in progress.values() if v["status"] == "failed"]

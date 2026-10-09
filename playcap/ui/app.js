@@ -885,4 +885,130 @@ document.addEventListener("click", async (ev) => {
   }
 });
 
+// ---------------------------------------------------------------- notifications & automation
+// notify.py / schedule.py hold the rules. Secrets never come back from the
+// server: a saved one shows as a placeholder; blank keeps it, Clear removes it.
+const AUTO_TEXT = ["notify_ntfy_server", "jellyfin_url", "plex_url", "plex_section_id", "schedule_time"];
+const AUTO_NUM = ["library_refresh_minutes", "schedule_every_hours"];
+const AUTO_SECRET = ["notify_ntfy_topic", "notify_ntfy_token", "notify_discord_webhook",
+  "notify_webhook_url", "jellyfin_api_key", "plex_token"];
+const EVENT_LABELS = { recorded: "Item recorded", failed: "Item failed", blocked: "Capture blocked or black",
+  finished: "Run finished" };
+let autoInfo = null;
+const autoClear = new Set();       // secrets the user asked to remove
+
+async function loadAutomation() {
+  let r;
+  try { r = await api("/api/automation"); } catch (e) { return; }
+  if (!r || !r.settings) { toast(r && r.message ? r.message : "Could not read the automation settings.", false); return; }
+  autoInfo = r;
+  autoClear.clear();
+  const s = r.settings;
+  for (const k of AUTO_TEXT) $(k).value = s[k] == null ? "" : String(s[k]);
+  for (const k of AUTO_NUM) $(k).value = s[k] == null ? "" : String(s[k]);
+  $("notify_desktop").checked = s.notify_desktop === true;
+  $("schedule_mode").value = s.schedule_mode || "off";
+  for (const k of AUTO_SECRET) drawSecret(k, !!s["has_" + k]);
+  const on = new Set(Array.isArray(s.notify_events) ? s.notify_events : []);
+  $("auto-events").replaceChildren(...(r.events || []).map((ev) => el("label", { class: "check" },
+    el("input", { type: "checkbox", "data-event": ev, checked: on.has(ev) }), " " + (EVENT_LABELS[ev] || ev))));
+  drawSchedule();
+}
+
+function drawSecret(k, saved) {
+  const input = $(k);
+  input.value = "";
+  input.placeholder = autoClear.has(k) ? "will be removed when you save" : (saved ? "saved (leave blank to keep)" : "");
+  const old = input.parentNode.querySelector("button[data-clear]");
+  if (old) old.remove();
+  if (saved && !autoClear.has(k)) {
+    input.after(el("button", { class: "btn small ghost", "data-clear": k, text: "Clear",
+      onclick: (ev) => { ev.preventDefault(); autoClear.add(k); drawSecret(k, true); } }));
+  }
+}
+
+function drawSchedule() {
+  const sc = (autoInfo && autoInfo.schedule) || {};
+  const task = sc.task || {};
+  const mode = $("schedule_mode").value;
+  $("schedule_every_hours").closest("label").hidden = mode !== "every";
+  $("schedule_time").closest("label").hidden = mode === "off";
+  let text = sc.next ? `Saved schedule: ${sc.describe}; next due ${sc.next}.` : "No schedule saved.";
+  if (task.supported === false) text += " Scheduled runs need Windows; elsewhere run “python -m playcap schedule”.";
+  else if (task.registered) text += ` Windows will run it (next: ${task.next_run || "unknown"}).`;
+  else if (sc.next) text += " Not handed to Windows yet: press Run on schedule.";
+  $("auto-schedule").textContent = text;
+  $("auto-register").hidden = task.supported === false;
+  $("auto-register").textContent = task.registered ? "Update scheduled task" : "Run on schedule (Windows Task Scheduler)";
+  $("auto-unregister").hidden = !task.registered;
+}
+$("schedule_mode").addEventListener("change", drawSchedule);
+
+function collectAutomation() {
+  const out = {};
+  for (const k of AUTO_TEXT) out[k] = $(k).value.trim();
+  for (const k of AUTO_NUM) { const v = $(k).value.trim(); if (v !== "") out[k] = Number(v); }
+  for (const k of AUTO_SECRET) out[k] = autoClear.has(k) ? null : $(k).value.trim();
+  out.notify_desktop = $("notify_desktop").checked;
+  out.schedule_mode = $("schedule_mode").value;
+  out.notify_events = [...document.querySelectorAll("#auto-events input[data-event]")]
+    .filter((i) => i.checked).map((i) => i.dataset.event);
+  if (out.schedule_mode === "off" && !out.schedule_time) delete out.schedule_time;
+  return out;
+}
+
+async function saveAutomation() {
+  document.querySelectorAll("[data-auto-err]").forEach((e) => { e.textContent = ""; });
+  let r;
+  try { r = await api("/api/automation/save", collectAutomation()); } catch (e) {
+    toast("The playcap UI server is not responding.", false);
+    return false;
+  }
+  const errors = r.errors && typeof r.errors === "object" ? r.errors : {};
+  const loose = [];
+  for (const [k, msg] of Object.entries(errors)) {
+    const slot = document.querySelector(`[data-auto-err="${CSS.escape(k)}"]`);
+    if (slot) slot.textContent = msg; else loose.push(`${k}: ${msg}`);
+  }
+  if (Object.keys(errors).length) {
+    toast("Not saved. " + (loose.join(" · ") || "Check the marked fields."), false);
+    return false;
+  }
+  toast(r.message || "Saved.", r.ok !== false);
+  await loadAutomation();
+  return r.ok !== false;
+}
+
+async function autoButton(btn, work) {
+  if (busy) { toast("Still working on the last action…"); return; }
+  busy = true; btn.disabled = true;
+  try { await work(); } finally { busy = false; btn.disabled = false; }
+}
+
+$("auto").addEventListener("toggle", () => { if ($("auto").open) loadAutomation(); });
+$("auto-save").onclick = () => autoButton($("auto-save"), saveAutomation);
+// The test uses what is saved, so save first.
+$("auto-test").onclick = () => autoButton($("auto-test"), async () => {
+  if (!(await saveAutomation())) return;
+  try {
+    const r = await api("/api/automation/test", {});
+    toast(r.message || "Done.", r.ok !== false);
+  } catch (e) { toast("The playcap UI server is not responding.", false); }
+});
+$("auto-register").onclick = () => autoButton($("auto-register"), async () => {
+  if (!(await saveAutomation())) return;
+  try {
+    const r = await api("/api/schedule/register", {});
+    toast(r.message || "Done.", r.ok !== false);
+  } catch (e) { toast("The playcap UI server is not responding.", false); }
+  await loadAutomation();
+});
+$("auto-unregister").onclick = () => autoButton($("auto-unregister"), async () => {
+  try {
+    const r = await api("/api/schedule/unregister", {});
+    toast(r.message || "Done.", r.ok !== false);
+  } catch (e) { toast("The playcap UI server is not responding.", false); }
+  await loadAutomation();
+});
+
 refresh();

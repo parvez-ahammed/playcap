@@ -28,5 +28,24 @@
   "title_collapse_restated": false,
   "title_max_len": 80,
   "show_plot": "",
-  "show_premiered": ""
+  "show_premiered": "",
+
+  "notify_events": ["recorded", "failed", "blocked", "finished"],
+  "notify_ntfy_server": "https://ntfy.sh",
+  "notify_ntfy_topic": "",
+  "notify_ntfy_token": "",
+  "notify_discord_webhook": "",
+  "notify_webhook_url": "",
+  "notify_desktop": false,
+
+  "jellyfin_url": "",
+  "jellyfin_api_key": "",
+  "plex_url": "",
+  "plex_token": "",
+  "plex_section_id": "",
+  "library_refresh_minutes": 10,
+
+  "schedule_mode": "off",
+  "schedule_time": "03:00",
+  "schedule_every_hours": 6
 }

@@ -195,6 +195,81 @@
       </div>
     </div>
 
+    <!-- Notifications & automation (notify.py, schedule.py). Secrets are never
+         sent to this page: a saved one shows as a placeholder, blank keeps it. -->
+    <div class="card">
+      <details id="auto" class="auto">
+        <summary>Notifications &amp; automation</summary>
+        <h4 class="qhead">Tell me when</h4>
+        <div id="auto-events" class="row wrap"></div>
+        <div class="advgrid">
+          <label class="field"><span>ntfy server</span>
+            <input id="notify_ntfy_server" type="url" spellcheck="false" placeholder="https://ntfy.sh">
+            <small class="err" data-auto-err="notify_ntfy_server"></small></label>
+          <label class="field"><span>ntfy topic <small class="muted">acts as a password; pick something long</small></span>
+            <input id="notify_ntfy_topic" data-secret type="password" autocomplete="off" spellcheck="false">
+            <small class="err" data-auto-err="notify_ntfy_topic"></small></label>
+          <label class="field"><span>ntfy access token <small class="muted">only for a server that needs a login</small></span>
+            <input id="notify_ntfy_token" data-secret type="password" autocomplete="off" spellcheck="false">
+            <small class="err" data-auto-err="notify_ntfy_token"></small></label>
+          <label class="field"><span>Discord webhook URL</span>
+            <input id="notify_discord_webhook" data-secret type="password" autocomplete="off" spellcheck="false">
+            <small class="err" data-auto-err="notify_discord_webhook"></small></label>
+          <label class="field"><span>Other webhook URL <small class="muted">JSON POST</small></span>
+            <input id="notify_webhook_url" data-secret type="password" autocomplete="off" spellcheck="false">
+            <small class="err" data-auto-err="notify_webhook_url"></small></label>
+        </div>
+        <label class="check"><input id="notify_desktop" type="checkbox"> Windows desktop notification</label>
+        <div class="row wrap"><button id="auto-test" class="btn small">Send test notification</button></div>
+
+        <h4 class="qhead">Refresh my media server after each recording</h4>
+        <div class="advgrid">
+          <label class="field"><span>Jellyfin / Emby address</span>
+            <input id="jellyfin_url" type="url" spellcheck="false" placeholder="http://127.0.0.1:8096">
+            <small class="err" data-auto-err="jellyfin_url"></small></label>
+          <label class="field"><span>Jellyfin / Emby API key</span>
+            <input id="jellyfin_api_key" data-secret type="password" autocomplete="off" spellcheck="false">
+            <small class="err" data-auto-err="jellyfin_api_key"></small></label>
+          <label class="field"><span>Plex address</span>
+            <input id="plex_url" type="url" spellcheck="false" placeholder="http://127.0.0.1:32400">
+            <small class="err" data-auto-err="plex_url"></small></label>
+          <label class="field"><span>Plex token</span>
+            <input id="plex_token" data-secret type="password" autocomplete="off" spellcheck="false">
+            <small class="err" data-auto-err="plex_token"></small></label>
+          <label class="field"><span>Plex library number <small class="muted">blank = all libraries</small></span>
+            <input id="plex_section_id" type="text" spellcheck="false">
+            <small class="err" data-auto-err="plex_section_id"></small></label>
+          <label class="field"><span>At most one refresh every (min)</span>
+            <input id="library_refresh_minutes" type="number" min="1" max="1440">
+            <small class="err" data-auto-err="library_refresh_minutes"></small></label>
+        </div>
+
+        <h4 class="qhead">Check for new videos on a schedule</h4>
+        <p class="muted small">Refreshes the queue and records whatever is new. Skipped while a recording is already running.</p>
+        <div class="advgrid">
+          <label class="field"><span>Schedule</span>
+            <select id="schedule_mode">
+              <option value="off">Off</option>
+              <option value="daily">Every day</option>
+              <option value="every">Every N hours</option>
+            </select><small class="err" data-auto-err="schedule_mode"></small></label>
+          <label class="field"><span>At (24-hour)</span>
+            <input id="schedule_time" type="text" spellcheck="false" placeholder="03:00">
+            <small class="err" data-auto-err="schedule_time"></small></label>
+          <label class="field"><span>Every (hours)</span>
+            <input id="schedule_every_hours" type="number" min="1" max="23">
+            <small class="err" data-auto-err="schedule_every_hours"></small></label>
+        </div>
+        <p id="auto-schedule" class="muted small"></p>
+        <div class="row wrap">
+          <button id="auto-register" class="btn small">Run on schedule (Windows Task Scheduler)</button>
+          <button id="auto-unregister" class="btn small ghost" hidden>Stop scheduled runs</button>
+        </div>
+
+        <div class="row wrap"><button id="auto-save" class="btn primary">Save</button></div>
+      </details>
+    </div>
+
     <!-- Always reachable, even before any job has run: the raw logs are the
          first thing to look at when "What happened" has nothing to say. -->
     <div class="card">

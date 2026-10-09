@@ -23,6 +23,11 @@ Recording-quality keys (record_mode, record_crf, video_bitrate_kbps,
 x264_preset, keyframe_seconds) are checked by record_quality.validate and
 stored as numbers; they reach OBS the next time playcap starts it.
 
+Notification, media-server and schedule keys are checked by notify.validate
+and schedule.validate. Secrets among them (notify.SECRET_KEYS: webhook URLs,
+the ntfy topic, API tokens) are never sent back to the page, so the page sends
+"" to mean "keep the saved one" and null to mean "remove it".
+
 The "links" pseudo-key belongs to the generic adapter: the pasted lines are
 written to queue.txt next to config.json and queue_source points at it.
 """
@@ -218,7 +223,18 @@ def validate(partial, root):
                 errors[key] = f"A whole number from {lo} to {hi}."
     errors.update(record_quality.validate(partial))
     errors.update(_validate_layout(partial))
+    errors.update(_validate_automation(partial))
     return errors
+
+
+def _validate_automation(partial):
+    from playcap import notify, schedule   # deferred: schedule imports jobs, which imports this
+    return {**notify.validate(partial), **schedule.validate(partial)}
+
+
+def automation_keys():
+    from playcap import notify, schedule
+    return notify.UI_KEYS | schedule.UI_KEYS
 
 
 LAYOUTS = ("folder", "media_server", "custom")
@@ -258,6 +274,20 @@ def _adapter_keys(partial, current):
     return {f.get("key") for f in a.setup_fields if isinstance(f, dict)}
 
 
+def _apply_secrets(partial, current, merged):
+    """Secrets are never shown to the page: "" keeps the saved value, and
+    null removes a key (any automation key, secret or not)."""
+    from playcap import notify
+    for key in automation_keys() & set(partial):
+        if partial[key] is None:
+            merged.pop(key, None)
+        elif key in notify.SECRET_KEYS and partial[key] == "":
+            if key in current:
+                merged[key] = current[key]
+            else:
+                merged.pop(key, None)
+
+
 def save(root, partial):
     root = Path(root)
     partial = dict(partial)
@@ -265,7 +295,7 @@ def save(root, partial):
         current = read_strict(root / CONFIG_NAME, {})
     except Unreadable as exc:
         return read(root), {"_file": str(exc)}
-    unknown = set(partial) - UI_KEYS - _adapter_keys(partial, current)
+    unknown = set(partial) - UI_KEYS - automation_keys() - _adapter_keys(partial, current)
     if unknown:
         return current, {k: "Not a setting the UI can change." for k in sorted(unknown)}
     errors = validate(partial, root)
@@ -285,6 +315,10 @@ def save(root, partial):
         if key in partial:
             partial[key] = int(partial[key])
     merged = {**current, **partial}
+    _apply_secrets(partial, current, merged)
+    for key in ("library_refresh_minutes", "schedule_every_hours"):
+        if key in merged and key in partial:
+            merged[key] = int(merged[key])
     if partial.get("output_dir"):        # every check passed: now make the folder
         out = Path(str(partial["output_dir"]).strip())
         try:

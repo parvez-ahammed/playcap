@@ -29,6 +29,50 @@ comes out black. [Back to the README](../README.md)
 - **Simple local UI.** Runs on `127.0.0.1`, protected against cross-site
   requests. Jobs keep running if you close the UI; reopening it picks them up
   again.
+- **Hands-off overnight runs.** Optional notifications (ntfy, Discord, any
+  JSON webhook, Windows desktop toast) when an item is recorded, fails, is
+  capture-blocked or black, and when a run ends. Optional Jellyfin/Emby and
+  Plex library refresh after each filed recording. Optional schedule that
+  refreshes the queue and records whatever is new. All of it lives under
+  *Notifications & automation* in the UI.
+
+## Notifications, media-server refresh and the schedule
+
+Every setting below lives in `config.json` (the UI writes it for you). Leave a
+channel blank and it is off.
+
+| Key | What it does |
+| --- | --- |
+| `notify_events` | Which events to send: any of `recorded`, `failed`, `blocked`, `finished` (default: all) |
+| `notify_ntfy_server`, `notify_ntfy_topic`, `notify_ntfy_token` | ntfy push (default server `https://ntfy.sh`). The topic works like a password: anyone who knows it can read your messages |
+| `notify_discord_webhook` | A Discord channel webhook URL |
+| `notify_webhook_url` | Any URL; gets a JSON POST `{event, title, message, data, time}` |
+| `notify_desktop` | `true` for a Windows toast (uses Windows PowerShell, nothing to install) |
+| `jellyfin_url`, `jellyfin_api_key` | Jellyfin or Emby: `POST /Library/Refresh` after a recording is filed |
+| `plex_url`, `plex_token`, `plex_section_id` | Plex: `POST /library/sections/{id}/refresh` (blank id = all libraries) |
+| `library_refresh_minutes` | At most one library refresh per this many minutes (default 10), plus one at the end of the run |
+| `schedule_mode` | `off`, `daily` or `every` |
+| `schedule_time` | `HH:MM`. Daily: the time. Every N hours: the time the N-hour steps are counted from |
+| `schedule_every_hours` | 1-23 (for `every`) |
+
+How it behaves:
+
+- A notifier or media server that is down never stops a recording. Each send
+  runs in the background with a short timeout. Its first error is logged once,
+  with webhook URLs and tokens blanked out. Secrets stay in `config.json`: they
+  are never written to the logs or sent back to the UI page.
+- A scheduled run opens the playcap browser if needed, refreshes the queue,
+  then records. The recorder already skips finished items and waits for
+  unaired ones, so only new items get recorded. Failed items are retried.
+  A scheduled run is skipped, not queued, when a recording or re-compress is
+  already running.
+- On Windows, *Run on schedule* in the UI (or `python -m playcap schedule
+  --register`) adds a Task Scheduler task for the current user. It needs no
+  admin rights, survives reboots, and runs only while you are logged on,
+  because OBS needs your desktop. Its output goes to `schedule.log`. Task
+  Scheduler ends a task after 72 hours by default. If a long backlog hits
+  that limit, the next run picks up where it stopped. On other systems, keep
+  `python -m playcap schedule` running, or call `--once` from cron.
 
 ## Architecture
 
@@ -47,7 +91,11 @@ recorder ── per item: page_target -> navigate -> check_page -> find_player
                                        │
 optimize ── CRF re-encode to a sidecar -> verify duration -> archive original
             -> sidecar takes the episode name -> optimize.json
+            -> notify (recorded / failed / blocked) + debounced media-server refresh
+            -> at the end of the run: "finished" + last refresh
 organize / status / control ── filing, dashboard, local control panel
+schedule ── at each scheduled time: browser if closed -> build_queue -> recorder
+            (skipped while a recording runs; Windows Task Scheduler keeps it across reboots)
 ```
 
 ## Design notes

@@ -55,6 +55,11 @@ Closing panel | https://example.org/talks/closing-panel
 | `python -m playcap.optimize [--verify] [--only TEXT] [--crf 24]` (or `playcap-optimize`) | Verified in-place re-encode |
 | `python -m playcap.organize [--dry-run]` (or `playcap-organize`) | Re-file finished recordings under the current naming layout (and `.nfo` files if on) |
 | `python -m playcap.status [--watch]` (or `playcap-status`) | Write `status.html` |
+| `python -m playcap schedule` (or `playcap schedule`) | Wait for each scheduled time (`schedule_mode` in config.json), then refresh the queue and record what is new. Exits when the schedule is off |
+| `python -m playcap schedule --once` | One scheduled cycle now: browser if closed, refresh queue, record; waits for the recording to end |
+| `python -m playcap schedule --next` | Print when the next scheduled run is due |
+| `python -m playcap schedule --stop` | Ask a running `schedule` loop to exit (a recording it started keeps going) |
+| `python -m playcap schedule --register` / `--unregister` / `--status` | Add, remove or show the Windows Task Scheduler task for this folder (current user, no admin) |
 | `python -m playcap.tools.smoke_test URL` | Rehearse one page end to end |
 | `python -m playcap.tools.inspect_live` | Show what the `<video>` in each open tab reports |
 
