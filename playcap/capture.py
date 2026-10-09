@@ -138,6 +138,11 @@ def backend_name(cfg):
     return cfg.get("capture_backend") or "obs"
 
 
+def label(cfg):
+    """The active screen recorder's name as people know it: "OBS" or "ffmpeg"."""
+    return "ffmpeg" if backend_name(cfg) == "ffmpeg" else "OBS"
+
+
 def validate(partial):
     errors = {}
     if "capture_backend" in partial and partial["capture_backend"] not in BACKENDS:

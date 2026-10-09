@@ -14,6 +14,12 @@ process scan takes ~1 s), so the UI server runs them in a background thread
 (start_background) and snapshot() reads the latest result. Without the thread
 -- tests, one-off calls -- they run inline.
 
+The capture backend (playcap.capture) decides which wording applies. Messages
+about the capture itself (black, blocked) name the active recorder -- "OBS"
+or "ffmpeg" -- through friendly_error(raw, backend); OBS-only conditions (not
+running, websocket password) are neither probed nor shown when ffmpeg records,
+and the snapshot carries "capture_backend" so the UI's health dot follows.
+
 Problems carry an optional "level": "info" marks a condition playcap fixes by
 itself (OBS closed: the recorder starts it), which the UI shows without alarm.
 
@@ -90,10 +96,15 @@ def _effective(cfg):
     return merged, adapter
 
 
+RECORDER = {"obs": "OBS", "ffmpeg": "ffmpeg"}
+# What to check when the capture is black before playback, per backend.
+BLACK_HINT = {"obs": "Check OBS's capture source (Set up recording scene).",
+              "ffmpeg": "Check the browser window is on screen and not minimized."}
+
 FRIENDLY_ERRORS = [   # (substring of the raw error, what to tell a person)
-    ("CaptureBlocked", "This site's player hides its video from screen capture (protected playback). The page shows it, OBS gets black. playcap records only what the screen shows, so it cannot record this item."),
-    ("black before recording", "OBS showed a black screen before recording started. "
-                               "Check OBS's capture source (Set up recording scene)."),
+    # {rec} = the active screen recorder, {hint} = BLACK_HINT for it.
+    ("CaptureBlocked", "This site's player hides its video from screen capture (protected playback). The page shows it, {rec} gets black. playcap records only what the screen shows, so it cannot record this item."),
+    ("black before recording", "{rec} showed a black screen before recording started. {hint}"),
     ("capture has been black", "The recording went black part way and stayed black."),
     ("debug port unreachable", "The playcap browser was closed."),
     ("Cannot reach obs-websocket", "OBS was not running."),
@@ -110,13 +121,19 @@ FRIENDLY_ERRORS = [   # (substring of the raw error, what to tell a person)
 ]
 
 
-def friendly_error(raw):
+def friendly_error(raw, backend=None):
+    """A person-sized reason. `backend` ("obs" | "ffmpeg") names the recorder
+    in capture messages; without it they say "The screen recorder"."""
     if not raw:
         return None
     raw = str(raw)
     for needle, text in FRIENDLY_ERRORS:
         if needle.lower() in raw.lower():
-            return text
+            rec = RECORDER.get(backend, "the screen recorder")
+            hint = BLACK_HINT.get(backend, "Check the screen recorder captures the "
+                                           "monitor the browser is on.")
+            text = text.replace("{rec}", rec).replace("{hint}", hint)
+            return "T" + text[1:] if text.startswith("the ") else text   # never "Ffmpeg"
     return raw.split(":", 1)[-1].strip()[:140] or raw[:140]
 
 
@@ -146,7 +163,8 @@ def _items(root, cfg, adapter):
             chip = "waiting"
         out.append({"id": str(it.id), "title": it.title, "kind": it.kind,
                     "day": it.day, "time": it.time, "state": chip,
-                    "error": friendly_error(p.get("error")), "error_raw": p.get("error"),
+                    "error": friendly_error(p.get("error"), cfg.get("capture_backend")),
+                    "error_raw": p.get("error"),
                     "gb": p.get("gb")})
     return out
 
@@ -211,7 +229,10 @@ LIVE_STALE_S = 15
 
 def probe(root, raw_cfg, cfg):
     out = {"browser": port_open(int(cfg["chrome_debug_port"])), "disk_gb": None}
-    out["obs"], out["obs_message"] = check_obs(*detect.obs_settings(raw_cfg))
+    if cfg.get("capture_backend") == "ffmpeg":
+        out["obs"], out["obs_message"] = False, "not used (ffmpeg records)"
+    else:
+        out["obs"], out["obs_message"] = check_obs(*detect.obs_settings(raw_cfg))
     try:
         lib = Path(cfg["output_dir"])
         out["disk_gb"] = round(free_gb(lib if lib.is_absolute() else Path(root) / lib), 1)
@@ -269,6 +290,7 @@ def snapshot(root):
     snap["queue_offline"] = not getattr(adapter, "queue_needs_browser", True)
     snap["avg_item_minutes"] = cfg.get("avg_item_minutes")
     snap["library_dir"] = str(library_dir(root, cfg))
+    snap["capture_backend"] = cfg.get("capture_backend") or "obs"
 
     fresh = _live["thread"] and _live["data"] and time.time() - _live["t"] < LIVE_STALE_S
     live = _live["data"] if fresh else probe(root, raw_cfg, cfg)

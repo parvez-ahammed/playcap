@@ -137,3 +137,13 @@ def test_now_says_which_item_of_the_run(tmp_path, monkeypatch):
     recorder.write_now(Item(id="1", title="T", url="u"), {"t": 1}, 10.0)
     data = json.loads((tmp_path / ".playcap" / "now.json").read_text())
     assert (data["n"], data["of"]) == (2, 7)
+
+
+def test_preflight_black_names_the_active_recorder(monkeypatch):
+    monkeypatch.setattr(recorder.time, "sleep", lambda s: None)
+    monkeypatch.setattr(recorder, "program_luma", lambda obs: 0.0)
+    monkeypatch.setattr(recorder, "CFG", {"capture_backend": "ffmpeg"})
+    with pytest.raises(recorder.ItemFailed) as err:
+        recorder.preflight(None, seconds=2)
+    assert "ffmpeg output is black before recording" in str(err.value)
+    assert "OBS" not in str(err.value)

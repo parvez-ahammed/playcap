@@ -32,13 +32,16 @@ Black frames: some protected players render black to screen capture while
 looking fine on screen. If the capture is black from the first frame for
 BLOCKED_SECONDS while the page itself was not (preflight), the item fails as
 CaptureBlocked at once and is not retried: that is the player refusing capture,
-and playcap does not work around it. The DOM cannot show that, so each poll also asks OBS for a tiny
-screenshot of the program output and records its mean brightness in
+and playcap does not work around it. The DOM cannot show that, so each poll also asks the
+capture backend for a tiny frame of what it records (OBS: a screenshot of the
+program output; ffmpeg: its own preview BMP) and records its mean brightness in
 .playcap/now.json; the UI flags a near-zero value. A short dark stretch is
 only a warning (intros and fades exist), but BLACK_ABORT_SECONDS of unbroken
 black fails the item: a live run once captured a whole lecture as solid black
 (OBS pointed at no monitor) and would have filed it as done. The item stays
 queued. Rehearse with playcap.tools.smoke_test before a batch all the same.
+These failure messages name the active recorder (capture.label), so an
+ffmpeg user is never told to check OBS.
 
 Live status and stopping (for the UI, see playcap.jobs): every poll writes
 .playcap/now.json (title, position, brightness, and which item of this run it
@@ -411,16 +414,20 @@ def wait_playable(player, seconds=READY_WAIT_SECONDS):
 
 def preflight(obs, seconds=PREFLIGHT_SECONDS):
     """Refuse to record a capture that is already black before playback goes
-    fullscreen (the page itself is on screen then, so black means OBS sees the
-    wrong monitor or nothing). -> last brightness, or None if OBS cannot say."""
+    fullscreen (the page itself is on screen then, so black means the capture
+    sees the wrong monitor or nothing). -> last brightness, or None if the
+    backend cannot say."""
     luma = None
     for _ in range(int(seconds)):
         luma = program_luma(obs)
         if luma is None or luma >= BLACK_LUMA:
             return luma
         nap(1)
-    raise black_failure(f"OBS output is black before recording (brightness {luma:.1f}); "
-                        "check the capture source in OBS")
+    rec = capture.label(CFG)
+    where = ("check the capture source in OBS" if rec == "OBS"
+             else "check the browser window is on screen")
+    raise black_failure(f"{rec} output is black before recording (brightness {luma:.1f}); "
+                        + where)
 
 
 def start_playback(sess, player, rect):
@@ -629,7 +636,8 @@ def record_one(item, index, obs, speed, args):
                     f"{dark_for:.0f}s while it plays (protected player)")
             if dark_for > BLACK_ABORT_SECONDS:
                 raise black_failure(f"capture has been black for over {BLACK_ABORT_SECONDS}s "
-                                    "(OBS capturing the wrong/no monitor, or DRM)")
+                                    f"({capture.label(CFG)} capturing the wrong/no monitor, "
+                                    "or DRM)")
 
         path = obs.stop_record()
         LAST_DURATION = duration / speed
@@ -897,11 +905,14 @@ def main(argv=None):
                         if obs.record_status()["outputActive"]:
                             obs.stop_record()
                     except Exception:
-                        try:
-                            obs = connect_obs()
-                            apply_output_settings(obs)
-                        except ObsError as re_exc:
-                            sys.exit(f"OBS is gone and will not restart: {re_exc}")
+                        # ffmpeg has no server to reconnect to: the next
+                        # start() launches a fresh process.
+                        if not isinstance(obs, capture.Capture):
+                            try:
+                                obs = connect_obs()
+                                apply_output_settings(obs)
+                            except ObsError as re_exc:
+                                sys.exit(f"OBS is gone and will not restart: {re_exc}")
                     if attempt < MAX_ATTEMPTS:
                         print(f"    retrying in {RETRY_WAIT_SECONDS}s "
                               f"(attempt {attempt + 1}/{MAX_ATTEMPTS})")

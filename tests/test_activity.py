@@ -68,3 +68,12 @@ def test_queue_and_optimize_and_crash_fallbacks(tmp_path):
 def test_unknown_output_falls_back_to_last_line(tmp_path):
     log(tmp_path, "chrome_launch.log", "something new\nlast words\n")
     assert by_job(tmp_path)["browser"]["text"] == "last words"
+
+
+def test_black_test_names_the_configured_recorder(tmp_path):
+    log(tmp_path, "test_run.log", "    mean luma = 0.4 (BLACK)\n")
+    (tmp_path / "config.json").write_text('{"capture_backend": "ffmpeg"}')
+    text = by_job(tmp_path)["test"]["text"]
+    assert "ffmpeg captures the wrong screen" in text and "OBS" not in text
+    (tmp_path / "config.json").write_text('{"capture_backend": "obs"}')
+    assert "OBS captures the wrong screen" in by_job(tmp_path)["test"]["text"]

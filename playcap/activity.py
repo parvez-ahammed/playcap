@@ -15,13 +15,16 @@ that run, and the error reported is the exception line, not whatever the log
 printed last.
 
 Failure reasons go through state.friendly_error, so they read the same here
-as on the queue rows. Jobs that never ran (no log file) are left out.
+as on the queue rows. Messages about the capture name the screen recorder
+config.json selects (capture_backend: OBS or ffmpeg), since a black test clip
+means a different thing to check for each. Jobs that never ran (no log file)
+are left out.
 """
 import re
 from collections import Counter
 from pathlib import Path
 
-from playcap import jobs
+from playcap import jobs, settings
 
 TAIL_BYTES = 8000
 
@@ -61,7 +64,7 @@ def _last(lines, *needles):
     return None
 
 
-def _record(lines):
+def _record(lines, backend=None):
     from playcap.state import friendly_error
     # Only the latest run: it starts with the "N to record | ..." plan line.
     starts = [i for i, ln in enumerate(lines) if " to record | " in ln]
@@ -75,7 +78,7 @@ def _record(lines):
         if failed:
             # The summary lists each failed item as "FAILED title: error".
             tail = lines[len(lines) - lines[::-1].index(end):]
-            why = Counter(friendly_error(ln.split(": ", 1)[1]) for ln in tail
+            why = Counter(friendly_error(ln.split(": ", 1)[1], backend) for ln in tail
                           if ln.startswith("FAILED") and ": " in ln)
             if why:
                 reason, n = why.most_common(1)[0]
@@ -97,20 +100,27 @@ def _record(lines):
     return None
 
 
-def _test(lines):
+WRONG_SCREEN = {
+    "obs": "OBS captures the wrong screen (Settings → Set up recording scene)",
+    "ffmpeg": "ffmpeg captures the wrong screen (keep the browser window on screen)",
+}
+
+
+def _test(lines, backend=None):
     from playcap.state import friendly_error
     starts = [i for i, ln in enumerate(lines) if ln.startswith("[1] ")]
     lines = lines[starts[-1]:] if starts else lines
     luma = _last(lines, "mean luma =")
     if luma and "BLACK" in luma:
-        return ("Test: the recording came out black. Either OBS captures the wrong screen "
-                "(Settings → Set up recording scene) or the site hides its video from "
-                "screen capture."), "bad"
+        wrong = WRONG_SCREEN.get(backend, "the screen recorder captures the wrong screen")
+        return (f"Test: the recording came out black. Either {wrong} or the site hides "
+                "its video from screen capture."), "bad"
     if luma:
         return "Test passed: the 25 s recording shows a real picture.", "ok"
     failed = _last(lines, "*** FAILED:")
     if failed:
-        return "Test failed: " + friendly_error(failed.split("FAILED:", 1)[1].strip()), "bad"
+        return "Test failed: " + friendly_error(failed.split("FAILED:", 1)[1].strip(),
+                                                backend), "bad"
     crash = _crashed(lines)
     if crash:
         return f"Test stopped with an error: {crash[:160]}", "bad"
@@ -174,12 +184,16 @@ READERS = [("record", _record), ("test", _test), ("queue", _queue),
 
 def summarize(root):
     out = []
+    try:
+        backend = settings.read(root).get("capture_backend") or "obs"
+    except Exception:
+        backend = None
     for name, reader in READERS:
         lines, when = _lines(root, name)
         if not lines:
             continue
         try:
-            got = reader(lines)
+            got = reader(lines, backend) if reader in (_record, _test) else reader(lines)
         except Exception:
             got = None
         text, level = got or (lines[-1][:160], "info")

@@ -193,9 +193,12 @@ function setHealth(dots) {
 
 function renderHealth() {
   const h = snap.health || {};
+  // With ffmpeg there is no OBS to be offline: playcap starts ffmpeg per item.
+  const recorder = snap.capture_backend === "ffmpeg" ? [" ok", "ffmpeg records"]
+    : [h.obs ? " ok" : "", h.obs ? "OBS" : "OBS offline"];
   const dots = [
     [h.browser ? " ok" : "", h.browser ? "Browser" : "Browser closed"],
-    [h.obs ? " ok" : "", h.obs ? "OBS" : "OBS offline"],
+    recorder,
   ];
   if (typeof h.disk_gb === "number") {
     dots.push([h.disk_gb >= 10 ? " ok" : "", `${h.disk_gb.toFixed(0)} GB free`]);
@@ -504,7 +507,7 @@ $("rec-stop-now").onclick = () => {
   }
 };
 $("rec-kill").onclick = () => {
-  if (confirm("Force stop the recorder? playcap will also stop OBS's recording.")) job("kill", "record");
+  if (confirm("Force stop the recorder? playcap will also stop the screen recording.")) job("kill", "record");
 };
 $("opt-start").onclick = () => job("start", "optimize");
 $("opt-stop").onclick = () => job("stop", "optimize", { mode: "now" });

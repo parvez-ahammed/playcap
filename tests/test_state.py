@@ -160,3 +160,27 @@ def test_snapshot_tells_the_ui_what_it_needs(tmp_path):
     assert snap["queue_offline"] is True               # a list of links needs no browser
     assert snap["avg_item_minutes"] == 30
     assert snap["library_dir"] == str(tmp_path / "rec")  # relative to the playcap folder
+
+
+def test_capture_messages_name_the_active_recorder():
+    raw = "ItemFailed: OBS output is black before recording (brightness 0.0)"
+    obs = state.friendly_error(raw, "obs")
+    ff = state.friendly_error(raw, "ffmpeg")
+    assert obs.startswith("OBS showed a black screen") and "Set up recording scene" in obs
+    assert ff.startswith("ffmpeg showed a black screen") and "OBS" not in ff
+    assert state.friendly_error(raw).startswith("The screen recorder showed")
+    blocked = state.friendly_error("CaptureBlocked: x", "ffmpeg")
+    assert "ffmpeg gets black" in blocked and "OBS" not in blocked
+
+
+def test_ffmpeg_backend_never_probes_or_mentions_obs(tmp_path, monkeypatch):
+    configure(tmp_path, tmp_path / "out", capture_backend="ffmpeg")
+    monkeypatch.setattr(state, "check_obs",
+                        lambda url, pw: pytest.fail("OBS must not be probed with ffmpeg"))
+    write(tmp_path / "queue.json", [{"id": "b", "url": "https://x/b", "title": "B"}])
+    write(tmp_path / "progress.json", {"b": {"status": "failed", "title": "B",
+                                             "error": "CaptureBlocked: capture-blocked"}})
+    snap = state.snapshot(tmp_path)
+    assert snap["capture_backend"] == "ffmpeg"
+    assert not any(p["code"] == "obs" for p in snap["problems"])
+    assert "ffmpeg gets black" in snap["items"][0]["error"]
