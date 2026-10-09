@@ -283,8 +283,12 @@ _enc_cache = {}
 
 
 def _run(cmd, timeout=20):
+    # stdin=DEVNULL: with an inherited, redirected stdin (the UI started from a
+    # background shell or a launcher) some ffmpeg builds print an empty
+    # `-devices` list, which made gdigrab look missing.
     kw = {"creationflags": CREATE_NO_WINDOW} if sys.platform.startswith("win") else {}
-    return subprocess.run(cmd, capture_output=True, timeout=timeout, **kw)
+    return subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL,
+                          timeout=timeout, **kw)
 
 
 def parse_dshow_audio(text):
@@ -450,7 +454,11 @@ def record_args(ffmpeg, *, grabber, region, output_idx, fps, encoder, quality,
     cmd += [*encoder_args(encoder, quality, fps)]
     if audio:
         cmd += AUDIO_ARGS
-    cmd += ["-f", "matroska", str(out_path),
+    # -flush_packets 1: write each packet through instead of filling a 32 KB
+    # buffer first. A still picture at CRF 24 can take longer than start()'s
+    # confirmation window to fill it (the bundled demo did), and unflushed
+    # bytes are also what a killed ffmpeg would lose.
+    cmd += ["-flush_packets", "1", "-f", "matroska", str(out_path),
             "-map", "[p]", "-c:v", "bmp", "-f", "image2", "-update", "1", str(preview_path)]
     return cmd
 

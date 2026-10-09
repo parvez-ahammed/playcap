@@ -185,6 +185,8 @@ code#name-preview { font-size: 13px; }
 /* Try it now (first run) and winget installs */
 .tryit { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 .tryit h2 { margin-top: 0; }
+/* line up with the setup wizard below it, which is narrower than main */
+.tryit:has(~ #wizard:not([hidden])) { max-width: 760px; margin-left: auto; margin-right: auto; }
 .tryit-needs { list-style: none; padding: 0; margin: 8px 0; }
 .tryit-needs li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 4px 0; }
 .tool .install { margin-top: 4px; }

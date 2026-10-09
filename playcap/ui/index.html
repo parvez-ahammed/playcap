@@ -47,8 +47,9 @@
 
     <div class="card step" data-step="1">
       <h2>Tools</h2>
-      <p class="muted">playcap needs these four free programs. It found what you see below; change a path
-        only if it picked the wrong one.</p>
+      <p class="muted">playcap needs Chrome and ffmpeg (with ffprobe), plus OBS unless you choose
+        "ffmpeg only" below. All are free. It found what you see below; change a path only if it
+        picked the wrong one.</p>
       <div id="tools" class="tools"></div>
       <pre id="install-log" class="install-log" hidden></pre>
       <div class="obsbox">
@@ -286,7 +287,9 @@
       <table class="list">
         <tbody id="recipe-body"></tbody>
       </table>
-      <p id="recipe-empty" class="muted small" hidden>No recipes yet. Ready-made ones for common players are in the recipes folder that ships with playcap.</p>
+      <p id="recipe-empty" class="muted small" hidden>No recipes yet. Ready-made ones for common player types are in the
+        <a href="https://github.com/parvez-ahammed/playcap/tree/main/recipes" target="_blank" rel="noopener">recipes folder on GitHub</a>:
+        download one and press Import.</p>
     </div>
 
     <!-- Notifications & automation (notify.py, schedule.py). Secrets are never
