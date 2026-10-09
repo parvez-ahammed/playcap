@@ -1,0 +1,26 @@
+# DRAFT, not submitted. See packaging/README.md, step 4.
+# Points at the Inno Setup installer (packaging/windows/playcap.iss), not the
+# portable zip: winget's zip+portable type needs a nested .exe, and playcap
+# starts from a .bat. Fill InstallerSha256 from the signed setup.exe attached
+# to the release (or let `wingetcreate update` do it).
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+PackageIdentifier: playcap.playcap
+PackageVersion: 0.1.0
+MinimumOSVersion: 10.0.0.0
+InstallerType: inno
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+UpgradeBehavior: install
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/parvez-ahammed/playcap/releases/download/v0.1.0/playcap-0.1.0-setup.exe
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+Dependencies:
+  PackageDependencies:
+    - PackageIdentifier: OBSProject.OBSStudio
+    - PackageIdentifier: Gyan.FFmpeg
+ManifestType: installer
+ManifestVersion: 1.10.0
