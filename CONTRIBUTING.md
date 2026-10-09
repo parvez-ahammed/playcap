@@ -6,12 +6,13 @@ publish.
 ## Scope
 
 - **Welcome:** recorder robustness (stall recovery, re-attach, resumability),
-  generic adapters for open standards (plain HTML5 video, HLS test pages,
+  [recipes](recipes/README.md) and generic adapters for open standards and
+  player types (plain HTML5 video, HLS test pages, Video.js, Plyr,
   self-hosted players), OBS/ffmpeg handling, verification, filing, docs, and
-  support for more platforms (Linux, macOS).
+  support for more platforms (Linux, macOS). See [ROADMAP.md](ROADMAP.md).
 - **Not accepted:** DRM decryption or stream/key extraction, login
   automation, session or token copying, device- or concurrency-limit
-  workarounds, and adapters for paid content platforms. See
+  workarounds, and adapters or recipes for paid content platforms. See
   [RESPONSIBLE_USE.md](RESPONSIBLE_USE.md).
 
 Keep site-specific adapters in your own module, or in the gitignored
