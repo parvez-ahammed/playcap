@@ -19,6 +19,10 @@ classifiers = [
     "Topic :: Multimedia :: Video :: Capture",
 ]
 
+[project.urls]
+Homepage = "https://github.com/parvez-ahammed/playcap"
+Issues = "https://github.com/parvez-ahammed/playcap/issues"
+
 [project.optional-dependencies]
 test = ["pytest>=7"]
 

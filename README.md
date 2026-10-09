@@ -1,17 +1,22 @@
 # playcap
 
+[![tests](https://github.com/parvez-ahammed/playcap/actions/workflows/tests.yml/badge.svg)](https://github.com/parvez-ahammed/playcap/actions/workflows/tests.yml)
+[![License: GPL v3+](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+![Chrome + OBS](https://img.shields.io/badge/records%20with-Chrome%20%2B%20OBS-red.svg)
+
+**Screen recorders stop by the clock. playcap stops when the video does.**
+
 An open-source browser DVR. Give it a queue of web pages that play video. It
 opens each one in your own Chrome, starts playback, records the screen with
 OBS until the video itself reports that it has ended, and files the result in
 a tidy local library: a plain numbered folder by default, a media-server layout
 (Jellyfin, Emby, Plex, Kodi) or your own naming template.
 
-License: GPL-3.0-or-later.
+[![playcap in 60 seconds](docs/media/playcap-overview.gif)](docs/media/playcap-overview.mp4)
 
-[![playcap in 60 seconds](docs/media/playcap-overview.png)](docs/media/playcap-overview.mp4)
-
-*playcap in 60 seconds* ([MP4, 3.5 MB](docs/media/playcap-overview.mp4)). Made from code with
-example data only: no real site, account or recording appears in it.
+*playcap in 60 seconds.* Click for the [full-quality MP4 (3.5 MB)](docs/media/playcap-overview.mp4).
+Made from code with example data only: no real site, account or recording appears in it.
 
 ## Why
 
@@ -269,6 +274,12 @@ playcap is the wrong tool for that site.
 A black recording can also mean OBS is capturing the wrong screen. Press
 *Set up recording scene*, or run the smoke test on one page
 (`python -m playcap.tools.smoke_test "<page-url>"`) to tell the two apart.
+
+## Contributing
+
+Bug reports, adapters for new players and fixes are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md). If playcap saves you a night of babysitting
+a recorder, a star helps other people find it.
 
 ## License
 
