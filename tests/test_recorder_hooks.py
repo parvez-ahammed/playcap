@@ -147,3 +147,105 @@ def test_preflight_black_names_the_active_recorder(monkeypatch):
         recorder.preflight(None, seconds=2)
     assert "ffmpeg output is black before recording" in str(err.value)
     assert "OBS" not in str(err.value)
+
+
+# --- "blocked" is announced once per item ------------------------------------------------
+class _Sent:
+    def __init__(self):
+        self.events = []
+
+    def notifier(self, cfg):
+        sent = self
+
+        class N:
+            def send(self, event, **data):
+                sent.events.append(event)
+
+            def flush(self):
+                pass
+        return N()
+
+
+class _Refresher:
+    def __init__(self, cfg):
+        pass
+
+    def item_filed(self):
+        pass
+
+    def finish(self):
+        pass
+
+    def flush(self):
+        pass
+
+
+def _drive(tmp_path, monkeypatch, outcome):
+    """One recorder run over a one-item queue; record_one does `outcome`.
+    -> notification events sent, progress file afterwards."""
+    from playcap import adapters, capture, config, notify
+    from playcap.adapters.base import CaptureBlocked
+    monkeypatch.chdir(tmp_path)
+    cfg = {**config.DEFAULTS, "queue_file": str(tmp_path / "queue.json"),
+           "progress_file": str(tmp_path / "progress.json"),
+           "output_dir": str(tmp_path / "out"), "capture_backend": "ffmpeg"}
+    adapter = adapters.load("playcap.adapters.html5_video")
+    adapter.cfg = cfg
+    (tmp_path / "queue.json").write_text(json.dumps([{"id": "a", "url": "https://x/a",
+                                                      "title": "A"}]))
+    monkeypatch.setattr(recorder, "CFG", cfg)
+    monkeypatch.setattr(recorder, "ADAPTER", adapter)
+    monkeypatch.setattr(recorder, "nap", lambda *a, **k: None)
+    monkeypatch.setattr(recorder, "free_gb", lambda p: 999.0)
+    monkeypatch.setattr(recorder, "ensure_chrome", lambda: True)
+
+    class FakeCap(capture.Capture):
+        def __init__(self, *a, **k):
+            pass
+
+        def is_recording(self):
+            return False
+    monkeypatch.setattr(capture, "FfmpegCapture", FakeCap)
+    sent = _Sent()
+    monkeypatch.setattr(notify, "Notifier", sent.notifier)
+    monkeypatch.setattr(notify, "LibraryRefresher", _Refresher)
+
+    def record_one(item, index, obs, speed, args):
+        if outcome == "blocked":
+            raise CaptureBlocked("capture-blocked: black while it plays")
+        if outcome == "black":
+            raise recorder.black_failure("capture has been black for over 90s")
+        if outcome == "other":
+            raise recorder.ItemFailed("no player after 45s")
+        return str(tmp_path / "out" / "A.mp4"), 1.0
+    monkeypatch.setattr(recorder, "record_one", record_one)
+    recorder.main([])
+    return sent.events, json.loads((tmp_path / "progress.json").read_text())
+
+
+def test_blocked_item_is_announced_once_across_runs(tmp_path, monkeypatch):
+    events, progress = _drive(tmp_path, monkeypatch, "blocked")
+    assert events == ["blocked", "finished"]
+    assert progress["a"]["blocked_notified"] is True and progress["a"]["status"] == "failed"
+    # The scheduled re-scan tries it again: same block, nothing sent at all.
+    events, progress = _drive(tmp_path, monkeypatch, "blocked")
+    assert events == []
+    assert progress["a"]["blocked_notified"] is True
+    # A black capture is the same kind of news: still quiet.
+    events, _ = _drive(tmp_path, monkeypatch, "black")
+    assert events == []
+
+
+def test_blocked_is_announced_again_after_a_different_outcome(tmp_path, monkeypatch):
+    _drive(tmp_path, monkeypatch, "blocked")
+    events, progress = _drive(tmp_path, monkeypatch, "other")       # fails differently
+    assert events == ["failed", "finished"] and "blocked_notified" not in progress["a"]
+    events, _ = _drive(tmp_path, monkeypatch, "blocked")
+    assert events == ["blocked", "finished"]
+
+
+def test_a_success_clears_the_blocked_marker(tmp_path, monkeypatch):
+    _drive(tmp_path, monkeypatch, "blocked")
+    events, progress = _drive(tmp_path, monkeypatch, "ok")
+    assert events == ["recorded", "finished"]
+    assert progress["a"]["status"] == "done" and "blocked_notified" not in progress["a"]

@@ -69,6 +69,15 @@ early -- sends "finished" with the counts, after a last refresh. Every send
 runs on its own thread with a short timeout and swallows its own errors, so a
 dead webhook can never cost an item or hold the run up; the end of the run
 waits at most notify.FLUSH_SECONDS for the last messages.
+
+"blocked" is sent once per item, not once per run. A blocked item stays
+"failed" and is tried again on every run, so a scheduled re-scan would repeat
+the same alert forever. The progress entry carries "blocked_notified" (saved
+with the entry, so it survives a crash and a rerun like everything else);
+while the previous entry has it, a new block is counted but not announced,
+and a run whose only news is such repeats sends no "finished" either. Any
+other outcome -- recorded, or failed for another reason -- writes a fresh
+entry without the marker, so a later block is announced again.
 """
 import argparse
 import json
@@ -759,13 +768,27 @@ def finalize(path, item, index):
     return str(dst), size
 
 
-def run_end(alerts, refresher, ran):
+def blocked_alert(alerts, prev, entry, title, reason):
+    """Send "blocked" for this item unless its previous progress entry says it
+    was already announced; mark the new entry either way. -> True if sent."""
+    entry["blocked_notified"] = True
+    if isinstance(prev, dict) and prev.get("blocked_notified"):
+        print("    (already reported as blocked; no new notification)")
+        return False
+    alerts.send("blocked", title=title, reason=reason)
+    return True
+
+
+def run_end(alerts, refresher, ran, repeat_blocked=0):
     """Last library refresh + the "finished" message, then a bounded wait for
     both. A run that did nothing (a scheduled re-scan with nothing new) sends
-    nothing. Never raises: it runs in main()'s finally."""
+    nothing -- and blocked items already announced on an earlier run are not
+    news (repeat_blocked of ran["blocked"]). Never raises: it runs in main()'s
+    finally."""
     try:
         refresher.finish()
-        if ran["recorded"] or ran["failed"] or ran["blocked"] or ran["stopped"] or ran["note"]:
+        if (ran["recorded"] or ran["failed"] or ran["blocked"] > repeat_blocked
+                or ran["stopped"] or ran["note"]):
             alerts.send("finished", **ran)
         alerts.flush()
         refresher.flush()
@@ -857,6 +880,7 @@ def main(argv=None):
     consecutive = 0
     alerts, refresher = notify.Notifier(CFG), notify.LibraryRefresher(CFG)
     ran = {"recorded": 0, "failed": 0, "blocked": 0, "stopped": False, "note": ""}
+    repeat_blocked = 0
     try:
         for place, (index, it) in enumerate(todo, 1):
             RUN_PLACE = (place, len(todo))
@@ -867,6 +891,7 @@ def main(argv=None):
             # A stalled item is usually a network blip, and the same blip makes
             # the next few pages render no player at all. Retrying with a pause
             # turns a 10-item cascade of false failures into a short delay.
+            prev = progress.get(it.id)
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 try:
                     path, size = record_one(it, index, obs, args.speed, args)
@@ -897,7 +922,8 @@ def main(argv=None):
                         progress[it.id] = {"status": "failed", "title": it.title,
                                            "error": f"CaptureBlocked: {exc}"[:300]}
                         ran["blocked"] += 1
-                        alerts.send("blocked", title=it.title, reason=str(exc))
+                        if not blocked_alert(alerts, prev, progress[it.id], it.title, str(exc)):
+                            repeat_blocked += 1
                         break
                     if isinstance(exc, cdp.CdpError):
                         ensure_chrome()
@@ -924,7 +950,8 @@ def main(argv=None):
                     consecutive += 1
                     if getattr(exc, "black", False):
                         ran["blocked"] += 1
-                        alerts.send("blocked", title=it.title, reason=str(exc))
+                        if not blocked_alert(alerts, prev, progress[it.id], it.title, str(exc)):
+                            repeat_blocked += 1
                     else:
                         ran["failed"] += 1
                         alerts.send("failed", title=it.title,
@@ -955,7 +982,7 @@ def main(argv=None):
         obs.close()
         clear_now()
         jobs.clear_flags(Path.cwd(), "record")
-        run_end(alerts, refresher, ran)
+        run_end(alerts, refresher, ran, repeat_blocked)
 
     done = sum(1 for v in progress.values() if v["status"] == "done")
     failed = [v for v in progress.values() if v["status"] == "failed"]
