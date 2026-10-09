@@ -46,6 +46,9 @@ is -- RUN_PLACE, so the UI can say "item 2 of 7"). A stop-now flag is checked
 every second, also during retry and cooldown waits, and raises
 KeyboardInterrupt so the normal cleanup runs; a stop-after-current flag is
 checked between items. CTRL_BREAK is mapped to KeyboardInterrupt too.
+
+The first item ever filed from this folder stamps .playcap/first_run.json
+(playcap.firstrun): local-only install-time measurement, never sent anywhere.
 """
 import argparse
 import json
@@ -57,7 +60,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from playcap import cdp, config, jobs, obs_setup, organize, record_quality, screen
+from playcap import cdp, config, firstrun, jobs, obs_setup, organize, record_quality, screen
 from playcap.settings import atomic_write_json
 from playcap.adapters.base import VIDEO_STATE_JS, CaptureBlocked, ItemFailed  # noqa: F401
 from playcap.obs_client import Obs, ObsError
@@ -804,6 +807,7 @@ def main(argv=None):
                     progress[it.id] = {
                         "status": "done", "file": path, "gb": round(size, 2),
                         "title": it.title}
+                    firstrun.mark(Path.cwd(), "first_recording")   # local only, never fails
                     consecutive = 0
                     break
                 except (ItemFailed, cdp.CdpError, Exception) as exc:

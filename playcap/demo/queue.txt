@@ -1,0 +1,2 @@
+# playcap's bundled demo: one entry, the page next to this file.
+Demo test pattern | index.html

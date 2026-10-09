@@ -181,3 +181,12 @@ code#name-preview { font-size: 13px; }
 .banner { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;
   padding: 10px 20px; color: var(--bad-text); font-weight: 600;
   background: color-mix(in srgb, var(--bad) 10%, var(--card)); border-bottom: 1px solid color-mix(in srgb, var(--bad) 40%, var(--line)); }
+
+/* Try it now (first run) and winget installs */
+.tryit { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.tryit h2 { margin-top: 0; }
+.tryit-needs { list-style: none; padding: 0; margin: 8px 0; }
+.tryit-needs li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 4px 0; }
+.tool .install { margin-top: 4px; }
+.install-log { margin: 8px 0 0; max-height: 180px; overflow: auto; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 8px; font-size: 12px; white-space: pre-wrap; }

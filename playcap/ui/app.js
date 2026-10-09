@@ -169,6 +169,7 @@ async function refresh() {
   }
   clearBanner("state");
   snap = s;
+  firstRunTick();                           // Try it now + winget installs
   if (!snap.configured) {
     if ($("wizard").hidden) openWizard(false);
     return;
@@ -555,6 +556,7 @@ async function openWizard(cancellable) {
   $("wiz-cancel").hidden = !cancellable;
   setup = await loadSetup();
   renderTools();
+  renderInstall(true);
   renderObsStatus();
   const cfg = setup.config || {};
   chosenSource = cfg.adapter || (setup.adapters[0] && setup.adapters[0].module);
@@ -766,12 +768,11 @@ function renderSourceFields() {
       ? el("textarea", { id, spellcheck: "false", placeholder: "https://example.com/video-page\nIntro | https://example.com/another" })
       : el("input", { id, type: f.kind === "url" ? "url" : "text", spellcheck: "false" });
     input.value = f.kind === "links" ? (setup.links || "") : (cfg[f.key] || "");
-    // examples/demo/index.html ships with playcap; the links file is saved
-    // next to config.json and relative entries resolve against it, so this
-    // works when the UI was started from the playcap folder.
+    // The bundled demo has its own button (Try it now, playcap.demo), which
+    // works from any folder; pointing here at a checkout path would not.
     const demo = f.kind === "links" ? el("small", { class: "muted",
-      text: "Just trying playcap? Paste the line “Demo | examples/demo/index.html”: a six-second " +
-        "test pattern that ships with playcap. It works when the UI was started from the playcap folder." }) : null;
+      text: "Just trying playcap? Use “Try it now” at the top of the page: it records a six-second " +
+        "test video that ships with playcap, into its own demo folder." }) : null;
     return el("label", { class: "field" }, el("span", { text: f.label }), input,
       f.help ? el("small", { class: "muted", text: f.help }) : null, demo,
       el("small", { class: "err", "data-err": f.key }));
@@ -884,5 +885,127 @@ document.addEventListener("click", async (ev) => {
     b.disabled = false;
   }
 });
+
+
+// ---------------------------------------------------------------- try it now + installs
+// A first run starts with the bundled demo (playcap.demo): one button sets up
+// the browser and OBS and records six seconds into <root>/playcap-demo. Missing
+// tools get an "Install with winget" button where winget exists (playcap.install;
+// the request names the tool, never a command), else the download link.
+let demoInfo = null;
+let installInfo = null;
+let installWasRunning = false;
+let demoWasRunning = false;
+const NEED_TEXT = { chrome: "Chrome plays the video page.", obs: "OBS records the screen." };
+
+function tryItWanted() {
+  if (!snap) return false;
+  if (demoInfo && demoInfo.running) return true;
+  const c = snap.counts || {};
+  return !snap.configured || (!c.total && !(snap.library || []).length && !isRunning("record"));
+}
+
+async function firstRunTick() {
+  const wizardOpen = !$("wizard").hidden;
+  const want = tryItWanted();
+  if (!want && !wizardOpen && !installWasRunning && !demoWasRunning) {
+    $("tryit").hidden = true;
+    return;
+  }
+  try {
+    const [d, i] = await Promise.all([api("/api/demo"), api("/api/install")]);
+    if (d && d.phase) demoInfo = d;
+    if (i && i.packages) installInfo = i;
+  } catch (e) {
+    return;
+  }
+  const running = !!(installInfo && installInfo.running);
+  if (installWasRunning && !running) await installFinished();
+  installWasRunning = running;
+  const demoRunning = !!(demoInfo && demoInfo.running);
+  if (demoWasRunning && !demoRunning && demoInfo) toast(demoInfo.message || "The demo finished.", demoInfo.phase === "done");
+  demoWasRunning = demoRunning;
+  renderTryIt();
+  if (wizardOpen) renderInstall(false);
+}
+
+// After winget exits, detect again: the Tools rows and the OBS box follow.
+async function installFinished() {
+  toast("Install finished. Checking for the programs again.");
+  if ($("wizard").hidden || !setup) return;
+  const fresh = await loadSetup();
+  Object.assign(setup, { tools: fresh.tools, obs: fresh.obs, obs_running: fresh.obs_running });
+  renderTools();
+  renderInstall(true);
+  renderObsStatus();
+}
+
+function installButton(tool) {
+  const running = !!(installInfo && installInfo.running);
+  return el("button", { class: "btn small install", text: running ? "Installing…" : "Install with winget",
+    disabled: running, title: (installInfo.packages || {})[tool] || "",
+    onclick: () => act("/api/install", { tool }, () => { installWasRunning = true; }) });
+}
+
+function setInstallLog(id) {
+  const log = installInfo && installInfo.log;
+  const show = !!(installInfo && log && (installInfo.running || installWasRunning));
+  $(id).hidden = !show;
+  if (show && $(id).textContent !== log) {
+    $(id).textContent = log;
+    $(id).scrollTop = $(id).scrollHeight;
+  }
+}
+
+// Decorates the rows renderTools() drew; `fresh` after they were rebuilt.
+function renderInstall(fresh) {
+  if (!setup || !setup.tools) return;
+  if (!installInfo) { if (fresh) firstRunTick(); return; }
+  if (fresh) delete lastRender.install;
+  if (changed("install", [installInfo.winget, installInfo.running, setup.tools])) {
+    for (const [name, t] of Object.entries(setup.tools)) {
+      const input = $("tool-" + name);
+      if (!input) continue;
+      const box = input.parentElement;
+      box.querySelectorAll(".install").forEach((b) => b.remove());
+      if (!(t && t.ok) && installInfo.winget && (installInfo.packages || {})[name]) box.append(installButton(name));
+    }
+  }
+  setInstallLog("install-log");
+}
+
+function renderTryIt() {
+  const show = tryItWanted() || !!(demoInfo && demoInfo.phase === "done" && !(snap && snap.configured));
+  $("tryit").hidden = !show || !demoInfo;
+  if ($("tryit").hidden) return;
+  const d = demoInfo;
+  const needs = Array.isArray(d.needs) ? d.needs : [];
+  const winget = !!(installInfo && installInfo.winget);
+  const instRunning = !!(installInfo && installInfo.running);
+  if (changed("tryit-needs", [needs, winget, instRunning])) {
+    $("tryit-needs").replaceChildren(...needs.map((tool) => {
+      const [, url] = TOOL_HELP[tool] || ["", ""];
+      return el("li", {}, el("span", { text: `${TOOL_LABELS[tool] || tool} is not installed. ${NEED_TEXT[tool] || ""} ` }),
+        winget ? installButton(tool)
+          : el("a", { href: url, target: "_blank", rel: "noopener", text: "Download it" }));
+    }));
+  }
+  const start = $("tryit-start");
+  start.disabled = d.running || needs.length > 0 || instRunning;
+  start.textContent = d.running ? "Running…" : (d.phase === "done" ? "Try it again" : "Try it now");
+  $("tryit-stop").hidden = !d.running;
+  $("tryit-open").hidden = d.phase !== "done";
+  let text = d.message || "";
+  if (d.now && d.now.duration) text += ` ${clock(d.now.t)} of ${clock(d.now.duration)}.`;
+  if (needs.length && !d.running) text = "Install what is missing above, then press Try it now.";
+  if (d.error) text += " " + d.error;
+  if ($("tryit-status").textContent !== text) $("tryit-status").textContent = text;
+  $("tryit-file").textContent = d.phase === "done" && d.file ? "Saved as " + d.file : "";
+  setInstallLog("tryit-install-log");
+}
+
+$("tryit-start").onclick = () => act("/api/demo/start", {}, (r) => { if (r.ok) demoWasRunning = true; });
+$("tryit-stop").onclick = () => act("/api/demo/stop", {});
+$("tryit-open").onclick = () => act("/api/demo/open", {});
 
 refresh();

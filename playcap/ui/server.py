@@ -19,6 +19,12 @@ folder; the request carries no path.
 Queue edits (retry / skip) are refused while recording: the recorder holds
 the progress file in memory and rewrites it after every item, so an edit made
 underneath it would be silently lost.
+
+"Try it now" (/api/demo/*) records the bundled demo through the ordinary
+browser and record jobs; playcap.demo explains how it stays apart from the
+real queue and library. /api/install runs winget for one tool named from a
+fixed allowlist (playcap.install); the request never carries a command or
+package id. Both go through the same Host/token/Origin/JSON guards.
 """
 import argparse
 import json
@@ -34,6 +40,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from playcap import detect, jobs, obs_setup, record_quality, settings, state
+from playcap import demo, firstrun, install
 
 HERE = Path(__file__).resolve().parent
 STATIC = {"app.js": "application/javascript; charset=utf-8",
@@ -407,6 +414,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"ok": False, "message": "unknown job"})
                 stream = parse_qs(url.query).get("stream", ["out"])[0]
                 return self._send(200, {"text": jobs.tail(self.root, name, 300, stream)})
+            if path == "/api/demo":
+                return self._send(200, demo.status(self.root))
+            if path == "/api/install":
+                return self._send(200, install.status(self.root))
             return self._send(404, {"ok": False, "message": "not found"})
         except Exception as exc:          # never let one bad file kill the page
             return self._send(500, {"ok": False, "message": f"{exc.__class__.__name__}: {exc}"})
@@ -441,6 +452,19 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/browse":
                 kind = "folder" if body.get("kind") == "folder" else "file"
                 return self._send(200, {"ok": True, "path": browse(kind)})
+            if path == "/api/demo/start":
+                ok, msg = demo.start(self.root, lambda: obs_action(self.root, "launch"),
+                                     lambda: obs_action(self.root, "setup"))
+                return self._send(200, {"ok": ok, "message": msg})
+            if path == "/api/demo/stop":
+                ok, msg = demo.stop(self.root)
+                return self._send(200, {"ok": ok, "message": msg})
+            if path == "/api/demo/open":
+                ok, msg = demo.open_folder(self.root)
+                return self._send(200, {"ok": ok, "message": msg})
+            if path == "/api/install":
+                ok, msg = install.start(self.root, str(body.get("tool", "")))
+                return self._send(200, {"ok": ok, "message": msg})
             return self._send(404, {"ok": False, "message": "not found"})
         except Exception as exc:
             return self._send(500, {"ok": False, "message": f"{exc.__class__.__name__}: {exc}"})
@@ -488,6 +512,7 @@ def main(argv=None):
             webbrowser.open(url)
         return
     state.start_background(root)
+    firstrun.mark(root, "ui_first_started")      # local only; see playcap.firstrun
     print(f"playcap UI on {url}  (folder: {root})  -- Ctrl+C to quit")
     if not args.no_browser:
         threading.Timer(0.8, webbrowser.open, args=(url,)).start()

@@ -49,7 +49,10 @@ Made with example data only.
    - **Tools:** Chrome, OBS and ffmpeg are found for you. Press *Launch OBS*
      and *Set up recording scene*.
    - **What to record:** paste page links, one per line. To try it first,
-     paste `Demo | examples/demo/index.html` for a six-second test video.
+     press *Try it now* at the top of the page: it records a six-second test
+     video that ships with playcap into its own `playcap-demo/` folder.
+     Missing Chrome, OBS or ffmpeg? On Windows with winget, each has an
+     *Install with winget* button.
    - **Library:** choose where recordings go, how they are named and the
      quality.
 

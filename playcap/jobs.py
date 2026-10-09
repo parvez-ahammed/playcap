@@ -1,6 +1,7 @@
 """Start, watch and stop the pipeline's long-running jobs.
 
-    start(name, root, cfg, args=())  browser | queue | record | optimize (+ extra CLI args)
+    start(name, root, cfg, args=())  browser | queue | record | optimize | test | install
+                                    (+ extra CLI args; env= adds environment variables)
     stop(name, root, mode)          "now" or "after_current" (record only)
     kill(name, root)                last resort: force-terminate the process tree
     status(root)                    {name: {running, pid, started}}
@@ -34,6 +35,8 @@ flight, then exit. Jobs drop flags older than themselves at startup
 start() runs under a lock and records the OS's own creation time of the
 child, so two Start clicks cannot launch two recorders and a recycled PID is
 never taken for the job (and never force-killed).
+"install" runs a fixed winget command (playcap.install builds it; the UI
+passes cmd=) so its output lands in install.log like any other job's.
 """
 import json
 import os
@@ -48,19 +51,20 @@ from pathlib import Path
 from playcap import adapters, settings
 
 STATE_DIR = ".playcap"
-NAMES = ("browser", "queue", "record", "optimize", "test")
+NAMES = ("browser", "queue", "record", "optimize", "test", "install")
 MODULES = {"queue": "playcap.build_queue", "record": "playcap.recorder",
            "optimize": "playcap.optimize", "test": "playcap.tools.smoke_test"}
 # (stdout log, separate stderr log or None). optimize keeps ffmpeg's -stats
 # on stderr because status/state parse progress from optimize.err.
 LOGS = {"browser": ("chrome_launch.log", None), "queue": ("build_queue.log", None),
         "record": ("record_run.log", None), "optimize": ("optimize.log", "optimize.err"),
-        "test": ("test_run.log", None)}
+        "test": ("test_run.log", None), "install": ("install.log", None)}
 EXCLUSIVE = {"record": "optimize", "optimize": "record"}
 START_TOLERANCE_S = 10   # PID-file start time vs. the process's real creation time
 EXACT_TOLERANCE_S = 2    # ... when the file holds the OS's own creation time
 FRIENDLY = {"browser": "The browser", "queue": "Loading the queue",
-            "record": "Recording", "optimize": "Re-compressing", "test": "The test"}
+            "record": "Recording", "optimize": "Re-compressing", "test": "The test",
+            "install": "The install"}
 RUN_MARK = "=== playcap run:"   # written to the log at each start (read by activity)
 _start_lock = threading.Lock()   # the UI server is threaded: two Start clicks at once
 
@@ -210,14 +214,14 @@ def command(name, cfg):
     return [sys.executable, "-u", "-m", MODULES[name]]
 
 
-def start(name, root, cfg, cmd=None, args=()):
+def start(name, root, cfg, cmd=None, args=(), env=None):
     if name not in NAMES:
         return False, f"unknown job {name!r}"
     with _start_lock:
-        return _start(name, root, cfg, cmd, args)
+        return _start(name, root, cfg, cmd, args, env)
 
 
-def _start(name, root, cfg, cmd, args):
+def _start(name, root, cfg, cmd, args, extra_env=None):
     st = status(root)
     if st[name]["running"]:
         return False, f"{FRIENDLY[name]} is already running."
@@ -241,7 +245,7 @@ def _start(name, root, cfg, cmd, args):
     code_root = str(Path(__file__).resolve().parent.parent)
     path = os.pathsep.join(p for p in (code_root, os.environ.get("PYTHONPATH", "")) if p)
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8",
-           "PYTHONUTF8": "1", "PYTHONPATH": path}
+           "PYTHONUTF8": "1", "PYTHONPATH": path, **(extra_env or {})}
     try:
         proc = subprocess.Popen((cmd or command(name, cfg)) + list(args), cwd=str(root), stdout=out,
                                 stderr=err, stdin=subprocess.DEVNULL,
