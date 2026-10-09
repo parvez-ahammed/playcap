@@ -23,6 +23,9 @@ Recording-quality keys (record_mode, record_crf, video_bitrate_kbps,
 x264_preset, keyframe_seconds) are checked by record_quality.validate and
 stored as numbers; they reach OBS the next time playcap starts it.
 
+Capture keys (capture_backend, capture_grabber, capture_encoder,
+capture_audio, capture_fps) are checked by capture.validate.
+
 The "links" pseudo-key belongs to the generic adapter: the pasted lines are
 written to queue.txt next to config.json and queue_source points at it.
 """
@@ -32,7 +35,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from playcap import adapters, record_quality
+from playcap import adapters, capture, record_quality
 
 CONFIG_NAME = "config.json"
 LINKS_FILE = "queue.txt"
@@ -217,6 +220,7 @@ def validate(partial, root):
             if not ok:
                 errors[key] = f"A whole number from {lo} to {hi}."
     errors.update(record_quality.validate(partial))
+    errors.update(capture.validate(partial))
     errors.update(_validate_layout(partial))
     return errors
 
@@ -247,7 +251,7 @@ def _validate_layout(partial):
 UI_KEYS = {"adapter", "links", "show", "output_dir", "obs_ws_url", "obs_password",
            "chrome_debug_port", "library_layout", "name_template", "write_nfo",
            "season", "title_max_len", "avg_item_minutes", *TOOL_KEYS,
-           *record_quality.DEFAULTS}
+           *record_quality.DEFAULTS, *capture.DEFAULTS}
 
 
 def _adapter_keys(partial, current):
@@ -280,7 +284,7 @@ def save(root, partial):
     for key in TOOL_KEYS:
         if key in partial and not str(partial[key] or "").strip():
             partial.pop(key)                    # blank = keep auto-detection
-    for key in ("record_crf", "video_bitrate_kbps", "keyframe_seconds", "season",
+    for key in ("record_crf", "video_bitrate_kbps", "keyframe_seconds", "season", "capture_fps",
                 "title_max_len", "avg_item_minutes", "chrome_debug_port"):
         if key in partial:
             partial[key] = int(partial[key])

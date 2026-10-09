@@ -288,7 +288,9 @@ def snapshot(root):
     snap["log"] = {n: jobs.tail(root, n, 15) for n in jobs.NAMES}
     snap["activity"] = activity.summarize(root)
 
-    if not ok and msg == "OBS is not running":
+    if cfg.get("capture_backend") == "ffmpeg":
+        pass        # OBS is not used: ffmpeg records (playcap.capture)
+    elif not ok and msg == "OBS is not running":
         # Not a blocker: the recorder starts OBS itself (recorder.connect_obs).
         problems.append({"code": "obs", "level": "info",
                          "text": "OBS is closed. playcap starts it when recording begins.",

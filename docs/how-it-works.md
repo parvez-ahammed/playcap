@@ -39,9 +39,10 @@ build_queue ── adapter.build_queue ──> queue.json
                                        │
 recorder ── per item: page_target -> navigate -> check_page -> find_player
             -> CDP trusted click (start playback) -> rewind to 0 if resumed
-            -> fullscreen player -> OBS StartRecord -> poll <video> every 10 s
+            -> fullscreen player -> start capture (OBS StartRecord, or ffmpeg)
+            -> poll <video> every 10 s
                (stall nudge, re-attach, pause resume, time budget)
-            -> OBS StopRecord -> file by the naming layout -> remux to faststart mp4
+            -> stop capture -> file by the naming layout -> remux to faststart mp4
             -> .nfo (media-server layout, or when switched on)
             -> progress.json (after every item)
                                        │
@@ -66,6 +67,51 @@ Worth knowing before you change anything:
   (`ffmpeg -v error -i new.mp4 -f null -`) and require zero output.
 - Chrome 136+ refuses `--remote-debugging-port` on the default profile, which
   is why playcap uses a dedicated one.
+
+## Capture backends: OBS or ffmpeg
+
+`"capture_backend"` in config.json (or *Screen recorder* in the UI's Tools
+step) picks the program that records the screen. Everything else (the CDP
+click, fullscreen before recording, polling the `<video>`, the black checks,
+filing and remuxing) is the same for both.
+
+| | OBS (`"obs"`, default) | ffmpeg (`"ffmpeg"`) |
+|---|---|---|
+| Installs | Chrome + OBS + ffmpeg | Chrome + ffmpeg |
+| Screen capture | OBS monitor capture, aimed at the browser's monitor | `ddagrab` (Desktop Duplication, FFmpeg 6.0+) on the browser's monitor; `gdigrab` when the build has no ddagrab or the monitor is on a second GPU |
+| System audio | Built in (desktop audio) | Only from a DirectShow loopback device: *Stereo Mix*, *virtual-audio-capturer* (screen-capture-recorder) or a virtual audio cable. None found: picture only, and the log says so |
+| Encoder | x264 via OBS's profile | NVENC / Quick Sync / AMF when one actually works (tested with a 5-frame encode), else libx264 |
+| Maturity | Years of use behind it | New. Windows only so far |
+
+Why audio needs a device with ffmpeg: mainline FFmpeg has no WASAPI loopback
+input. [Trac #9408](https://trac.ffmpeg.org/ticket/9408) is still open, and
+the Changelog through 8.1 has no WASAPI entry. DirectShow is the input every
+Windows build has, and it can only record a device that carries what the
+speakers play. Many sound drivers ship *Stereo Mix* disabled
+(Sound control panel > Recording > show disabled devices > Enable).
+`"capture_audio"`: `"auto"` (default, first loopback-looking device),
+`"none"`, or an exact device name.
+
+Other ffmpeg settings: `"capture_grabber"` (`auto`/`ddagrab`/`gdigrab`),
+`"capture_encoder"` (`auto`/`libx264`/`h264_nvenc`/`h264_qsv`/`h264_amf`),
+`"capture_fps"` (10-60, default 30). Quality (CRF or bitrate, keyframe
+interval) comes from the same *Recording quality* setting OBS uses.
+
+How the ffmpeg backend behaves:
+
+- It records to MKV. If ffmpeg is killed, an MKV still plays up to the last
+  cluster; an MP4 without its index would not. The finished file is remuxed to
+  faststart MP4 like an OBS recording.
+- Stopping sends `q` to ffmpeg so it writes a complete file. It runs in its own
+  process group, so stopping the recorder does not cut it off mid-write, and in
+  a kill-on-close job so it cannot outlive a crashed recorder.
+- If ffmpeg dies mid-item, the item fails and is retried; the partial file is
+  discarded, as with OBS.
+- **The DRM-black principle is the same.** While recording, the same ffmpeg
+  writes a tiny frame of what it is encoding once a second, and the recorder
+  measures its brightness: black before recording fails the item, black from
+  the first frame marks the player as capture-blocked, and long black aborts.
+  Rehearse with one item before a batch either way.
 
 ## Black recordings
 

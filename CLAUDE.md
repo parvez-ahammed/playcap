@@ -21,6 +21,7 @@ playcap/                 generic core. No site names anywhere in it.
   recorder.py            record loop (CDP click -> fullscreen -> OBS -> poll <video> -> finalize)
   build_queue.py optimize.py organize.py status.py browser.py
   cdp.py obs_client.py   minimal DevTools / obs-websocket v5 clients
+  capture.py             capture backends: OBS (default) or ffmpeg alone (ddagrab/gdigrab + dshow audio)
   ui/                    the UI: server.py (JSON API, Host/Origin/token guards) + index.html/app.js/style.css
   detect.py              finds Chrome/OBS/ffmpeg/ffprobe; reads OBS's websocket config
   settings.py            validated, atomic config.json saves for the UI

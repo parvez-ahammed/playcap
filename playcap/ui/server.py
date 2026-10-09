@@ -151,8 +151,17 @@ def setup_info(root):
         "links": settings.read_links(root, cfg),
         "root": str(Path(root).resolve()),
         "recording": recording_info(cfg),
+        "capture": capture_info(cfg),
     }
     return info
+
+
+def capture_info(cfg):
+    """Which screen-capture backends work here (detect.capture_backends)."""
+    try:
+        return detect.capture_backends(cfg)
+    except Exception as exc:
+        return {"backend": cfg.get("capture_backend") or "obs", "error": str(exc)}
 
 
 def recording_info(cfg):
