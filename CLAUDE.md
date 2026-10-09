@@ -1,7 +1,7 @@
 # playcap (repo: playcap)
 
 An open-source browser DVR (GPL-3.0-or-later). It drives a real logged-in Chrome through
-CDP, captures the screen with OBS until the page's `<video>` ends, then files the results by a
+CDP, captures the screen with OBS (or ffmpeg alone) until the page's `<video>` ends, then files the results by a
 naming layout (plain folder by default; media-server series or a custom template as options).
 The core is generic. Everything site-specific
 goes through an adapter.
@@ -18,11 +18,12 @@ playcap/                 generic core. No site names anywhere in it.
   config.py              config.json + adapter defaults; picks the adapter
   adapters/base.py       Adapter interface, Item, Player
   adapters/html5_video.py  public adapter: queue = URL list file, player = first <video>
-  recorder.py            record loop (CDP click -> fullscreen -> OBS -> poll <video> -> finalize)
+  recorder.py            record loop (CDP click -> fullscreen -> OBS/ffmpeg -> poll <video> -> finalize)
   build_queue.py optimize.py organize.py status.py browser.py
   cdp.py obs_client.py   minimal DevTools / obs-websocket v5 clients
   capture.py             capture backends: OBS (default) or ffmpeg alone (ddagrab/gdigrab + dshow audio)
   ui/                    the UI: server.py (JSON API, Host/Origin/token guards) + index.html/app.js/style.css
+  ui/recipes.js          the UI's Recipes card: teach a page, list/edit/export/import recipes
   detect.py              finds Chrome/OBS/ffmpeg/ffprobe; reads OBS's websocket config
   settings.py            validated, atomic config.json saves for the UI
   jobs.py                start/stop jobs: PID files, stop flags in .playcap/, CTRL_BREAK, kill
@@ -41,9 +42,13 @@ playcap/                 generic core. No site names anywhere in it.
                          runs the ordinary jobs with PLAYCAP_CONFIG -> <root>/playcap-demo/
   install.py             winget installs for Chrome/OBS/ffmpeg from a fixed allowlist
   firstrun.py            .playcap/first_run.json: UI first start -> first recording (local only)
+  recipes.py             recipes: JSON page descriptions (player, play button, item links) used
+                         by html5_video instead of writing an adapter; load/validate/match
+  teach.py               "Teach playcap a page": CDP-injected picker in the debug browser -> recipe
 record_all.py build_queue.py optimize.py organize.py status.py control.py
                          thin root wrappers so the old commands still work
 examples/demo/           test-pattern page + queue + config for a checkout (video lives in playcap/demo/).
+recipes/                 example recipes for generic players (Video.js, JW Player, Plyr, the demo); import in the UI
 tests/                   pytest suite
 playcap.bat              double-click launcher for the UI (Windows)
 local/                   PRIVATE, GITIGNORED: the owner's site adapter and launchers
