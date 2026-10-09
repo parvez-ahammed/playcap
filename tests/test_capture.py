@@ -354,3 +354,57 @@ def test_recorder_program_luma_uses_backend(tmp_path):
         def current_scene(self):
             raise ObsError("gone")
     assert recorder.program_luma(Broken()) is None
+
+
+# --- smoke test uses the configured backend -------------------------------------------
+def test_smoke_test_opens_the_configured_backend(tmp_path, monkeypatch):
+    from playcap.tools import smoke_test
+    made = []
+
+    class FakeFfmpeg(capture.Capture):
+        name = "ffmpeg"
+
+        def __init__(self, cfg, out_dir, **kw):
+            made.append(Path(out_dir))
+
+        def describe(self):
+            return "fake ffmpeg"
+    monkeypatch.setattr(capture, "FfmpegCapture", FakeFfmpeg)
+    monkeypatch.setattr(smoke_test, "Obs", lambda *a: pytest.fail("OBS must not be used"))
+    cap, rec = smoke_test.open_capture({"capture_backend": "ffmpeg", "output_dir": str(tmp_path)})
+    assert isinstance(cap, FakeFfmpeg) and rec == "ffmpeg"
+    assert made == [tmp_path / "_partial"]
+
+
+def test_smoke_test_obs_backend_checks_the_scene(monkeypatch):
+    from playcap.tools import smoke_test
+
+    class FakeObs:
+        closed = False
+
+        def __init__(self, *a):
+            pass
+
+        def version(self):
+            return {"obsVersion": "31"}
+
+        def current_scene(self):
+            return "playcap"
+
+        def scene_items(self, scene):
+            return [{"sourceName": "Display", "sceneItemEnabled": self.enabled}]
+
+        def close(self):
+            FakeObs.closed = True
+    monkeypatch.setattr(smoke_test, "Obs", FakeObs)
+    cfg = {"obs_password": "", "obs_ws_url": "ws://x"}
+    FakeObs.enabled = True
+    cap, rec = smoke_test.open_capture(cfg)
+    assert isinstance(cap, capture.ObsCapture) and rec == "OBS"
+
+    def boom(msg):
+        raise RuntimeError(msg)
+    FakeObs.enabled = False
+    with pytest.raises(RuntimeError, match="No enabled source"):
+        smoke_test.open_capture(cfg, fail=boom)
+    assert FakeObs.closed

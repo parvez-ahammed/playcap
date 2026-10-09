@@ -5,17 +5,25 @@ failure points at exactly which one was wrong. Records only ~25 s, then
 verifies a captured frame is not black: some DRM renders black to screen
 capture while looking fine on screen, and nothing in the DOM reveals it.
 
+It records with the configured capture backend (playcap.capture: OBS over its
+websocket, or ffmpeg run by playcap), through the same Capture surface and the
+same aim / pin steps the recorder uses, so a pass means the real run's capture
+path works. The black check decodes the finished clip with ffmpeg whichever
+backend made it: the clip on disk is what matters, not a live preview.
+
 Whatever happens -- a failed step, an exception, Stop in the UI -- the
-cleanup runs: OBS stops recording, the page leaves fullscreen and the browser
-window is un-pinned. A black or undecodable capture is a failure, not a pass.
+cleanup runs: the recording is stopped, the page leaves fullscreen and the
+browser window is un-pinned. A black or undecodable capture is a failure, not
+a pass.
 
 Usage:  python -m playcap.tools.smoke_test "<page-url>"
 """
 import subprocess
 import sys
 import time
+from pathlib import Path
 
-from playcap import cdp, config, jobs
+from playcap import capture, cdp, config, detect, jobs
 from playcap.adapters.base import VIDEO_STATE_JS, Item
 from playcap.obs_client import Obs, ObsError
 from playcap import screen
@@ -60,9 +68,36 @@ def main(url):
                 pass
 
 
-def _stop_if_recording(obs):
-    if obs.record_status().get("outputActive"):
-        obs.stop_record()
+def _stop_if_recording(cap):
+    if cap.is_recording():
+        cap.stop()
+
+
+def open_capture(cfg, fail=fail):
+    """The configured backend as a capture.Capture, checked enough to trust a
+    25 s recording. -> (cap, label)."""
+    if capture.backend_name(cfg) == "ffmpeg":
+        try:
+            # Its own folder: keep_clip then moves the clip into _partial/tests.
+            cap = capture.FfmpegCapture(cfg, Path(cfg["output_dir"]) / "_partial",
+                                        state_dir=jobs.STATE_DIR)
+        except ObsError as exc:
+            fail(f"ffmpeg capture is not usable: {exc}")
+        print("    ffmpeg:", cap.describe())
+        return cap, "ffmpeg"
+    try:
+        obs = Obs(cfg["obs_password"], cfg["obs_ws_url"])
+    except ObsError as exc:
+        fail(str(exc))
+    cap = capture.ObsCapture(obs)
+    print("    obs:", obs.version()["obsVersion"])
+    scene = obs.current_scene()
+    items = [(i["sourceName"], i["sceneItemEnabled"]) for i in obs.scene_items(scene)]
+    print(f"    scene '{scene}':", items)
+    if not any(en for _, en in items):
+        cap.close()
+        fail(f"No enabled source in OBS scene '{scene}' -- it would record nothing.")
+    return cap, "OBS"
 
 
 def _leave_fullscreen(sess):
@@ -76,21 +111,12 @@ def _run(url, undo):
     cfg, adapter = config.load()
     item = Item(id="smoke", title="smoke test", url=url)
 
-    step(1, "Preflight: Chrome debug port + OBS websocket")
+    step(1, f"Preflight: Chrome debug port + screen recorder ({capture.label(cfg)})")
     page = adapter.page_target(cfg, item)
     print("    chrome tab:", page["url"][:80])
-    try:
-        obs = Obs(cfg["obs_password"], cfg["obs_ws_url"])
-    except ObsError as exc:
-        fail(str(exc))
-    undo.append(obs.close)
-    undo.append(lambda: _stop_if_recording(obs))
-    print("    obs:", obs.version()["obsVersion"])
-    scene = obs.current_scene()
-    items = [(i["sourceName"], i["sceneItemEnabled"]) for i in obs.scene_items(scene)]
-    print(f"    scene '{scene}':", items)
-    if not any(en for _, en in items):
-        fail(f"No enabled source in OBS scene '{scene}' -- it would record nothing.")
+    cap, rec = open_capture(cfg)
+    undo.append(cap.close)
+    undo.append(lambda: _stop_if_recording(cap))
 
     step(2, "Navigate")
     sess = cdp.Session(page)
@@ -120,13 +146,16 @@ def _run(url, undo):
     read = lambda: player.session.js_json(VIDEO_STATE_JS % player.video)  # noqa: E731
     print("    video:", read())
 
-    step(5, "Aim OBS at this browser and keep it on top (as the recorder does)")
-    moved = screen.aim_capture(obs, screen.window_bounds(sess))
-    print("   ", moved or "OBS already captures the browser's monitor")
+    step(5, f"Aim {rec} at this browser and keep it on top (as the recorder does)")
+    moved = capture.aim(cap, screen.window_bounds(sess))
+    print("   ", moved or f"{rec} already captures the browser's monitor")
     pin = screen.Pin(sess).__enter__()
     undo.append(lambda: pin.__exit__(None, None, None))
     if pin.note:
         print("   ", pin.note)
+    moved = capture.aim_window(cap, pin.hwnd)        # ffmpeg only: exact monitor
+    if moved:
+        print("   ", moved)
 
     step(6, "Start playback: wait until playable, then a trusted click (recorder.start_playback)")
     try:
@@ -143,36 +172,38 @@ def _run(url, undo):
     print("    after:", sess.js("JSON.stringify({w: innerWidth, h: innerHeight, "
                                  "fs: !!document.fullscreenElement})"))
 
-    step(8, f"OBS record {RECORD_SECONDS}s")
-    obs.start_record()
+    step(8, f"{rec} record {RECORD_SECONDS}s")
+    cap.start()
     t0 = time.time()
     while time.time() - t0 < RECORD_SECONDS:
         time.sleep(5)
+        cap.check()                    # ffmpeg died mid-test -> fail loudly
         s = read()
         print(f"    t={s['t']:.1f}/{s['duration']:.1f} paused={s['paused']} "
               f"ended={s['ended']} ready={s['readyState']}")
-    path = obs.stop_record()
+    path = cap.stop()
     time.sleep(2)
     print("    wrote:", path)
 
     step(9, "Verify the capture is not black")
-    mean, err = black_check(cfg["ffmpeg"], path)
+    mean, err = black_check(detect.resolve("ffmpeg", cfg) or cfg["ffmpeg"], path)
     keep_clip(cfg, path)
     if mean is None:
         fail(f"could not decode a frame of the test clip: {err}")
     print(f"    mean luma = {mean:.1f} "
           f"({'BLACK' if mean < 3 else 'OK, real picture'})")
     if mean < 3:
-        fail("the capture is black. Either OBS is capturing the wrong screen (check the\n"
-             "    'playcap' scene in OBS), or this site's player hides its video from screen\n"
-             "    capture (protected playback). playcap records only what the screen shows\n"
-             "    and does not work around protected players, so such a site cannot be recorded.")
+        where = ("(check the\n    'playcap' scene in OBS)" if rec == "OBS"
+                 else "(keep the\n    browser window on screen, not minimized)")
+        fail(f"the capture is black. Either {rec} is capturing the wrong screen {where},\n"
+             "    or this site's player hides its video from screen capture (protected\n"
+             "    playback). playcap records only what the screen shows and does not work\n"
+             "    around protected players, so such a site cannot be recorded.")
     print("\nSmoke test finished.")
 
 
 def keep_clip(cfg, path):
     """Keep the test clip, but out of the library: it is not an item."""
-    from pathlib import Path
     from playcap.recorder import move_file
     try:
         keep = Path(cfg["output_dir"]) / "_partial" / "tests"
