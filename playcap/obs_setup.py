@@ -21,6 +21,13 @@ resolution), primary first among those, else the primary, else the first
 listed. Only our own input is repaired; a hand-picked monitor is kept as long
 as OBS still lists it.
 
+An item added over the websocket sits at scale 1 in the canvas's top-left
+corner, so a monitor whose size differs from the canvas was cropped: with a
+1080x1920 portrait monitor and a 1920x1080 canvas a live run kept the top of
+the screen and cut the centred, fullscreened video in half. So our own item is
+given a fit-to-canvas bounds box (letterboxed, follows later monitor switches),
+but only while its transform is still OBS's untouched default.
+
 enable_websocket() switches OBS's websocket server on by editing OBS's own
 config file -- only while OBS is closed, because OBS rewrites that file on
 exit. launch_obs() starts OBS the way the recorder's relaunch does.
@@ -100,6 +107,32 @@ def _point_at_monitor(obs, name, kind):
     return f"pointed '{name}' at {choice.get('itemName', 'a monitor')}"
 
 
+def _untouched(t):
+    """Is this OBS's default transform for an item added over the websocket?"""
+    return (t.get("boundsType", "OBS_BOUNDS_NONE") == "OBS_BOUNDS_NONE"
+            and t.get("scaleX", 1) == 1 and t.get("scaleY", 1) == 1
+            and t.get("positionX", 0) == 0 and t.get("positionY", 0) == 0
+            and t.get("rotation", 0) == 0)
+
+
+def _fit_to_canvas(obs, scene, name):
+    """Scale our capture item to fit the canvas if nobody has placed it. -> action or None."""
+    item = obs.request("GetSceneItemId", {"sceneName": scene, "sourceName": name})["sceneItemId"]
+    t = obs.request("GetSceneItemTransform", {"sceneName": scene, "sceneItemId": item}) \
+           .get("sceneItemTransform", {})
+    if not _untouched(t):
+        return None
+    video = obs.request("GetVideoSettings")
+    w, h = video.get("baseWidth"), video.get("baseHeight")
+    if not (w and h):
+        return None
+    obs.request("SetSceneItemTransform", {"sceneName": scene, "sceneItemId": item,
+                                          "sceneItemTransform": {
+        "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsWidth": w, "boundsHeight": h,
+        "boundsAlignment": 0, "alignment": 5, "positionX": 0, "positionY": 0}})
+    return f"fit '{name}' to the {w}x{h} canvas"
+
+
 def ensure(obs, scene=SCENE):
     actions = []
     kinds = obs.request("GetInputKindList", {"unversioned": True}).get("inputKinds", [])
@@ -133,6 +166,12 @@ def ensure(obs, scene=SCENE):
         fixed = _point_at_monitor(obs, CAPTURE_NAME, own[CAPTURE_NAME])
         if fixed:
             actions.append(fixed)
+        in_scene = {i.get("sourceName") for i in
+                    obs.request("GetSceneItemList", {"sceneName": scene}).get("sceneItems", [])}
+        if CAPTURE_NAME in in_scene:
+            fit = _fit_to_canvas(obs, scene, CAPTURE_NAME)
+            if fit:
+                actions.append(fit)
 
     if listing.get("currentProgramSceneName") != scene:
         obs.request("SetCurrentProgramScene", {"sceneName": scene})

@@ -20,6 +20,12 @@
 - Responsible use: removed a network/DRM-API diagnostic from the public tree;
   clearer policy, rights-holder contact, issue templates.
 - Fix: a partial ffmpeg recording is discarded when ffmpeg dies mid-item.
+- Fix: the video is held at 0:00 until the capture is live, then played.
+  Recordings used to lose their first seconds, and the six-second demo ended
+  before the capture started, leaving a still of its last frame.
+- Fix: playcap's OBS capture is fit to the canvas when nobody has placed it,
+  so a monitor of another size (a portrait screen, a 1440p monitor on a 1080p
+  canvas) is no longer cropped.
 
 ## 0.1.0
 

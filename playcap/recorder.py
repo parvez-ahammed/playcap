@@ -5,8 +5,8 @@ browser window on top, check OBS is not already black (playcap.screen) ->
 click the player (a CDP click is a trusted gesture,
 which is what starts gesture-gated playback; a synthetic JS
 .click() does not) -> fullscreen the player element so the video renders at
-its native resolution instead of the page's player box -> OBS records the
-screen -> poll the <video> until it ends -> stop, file it under the library
+its native resolution instead of the page's player box, holding the video
+paused at 0:00 -> OBS records the screen -> play() -> poll the <video> until it ends -> stop, file it under the library
 layout (playcap.organize), remux to mp4.
 
 Everything site-specific -- which tab, which element is the player, where its
@@ -525,6 +525,13 @@ def record_one(item, index, obs, speed, args):
                 st = state(player)
             print(f"    rewound to {st['t']:.0f}s")
 
+        # Playback has to start before the capture (only the trusted click
+        # starts it), and fullscreen plus the capture's own start take several
+        # seconds. Left playing, every recording lost its opening seconds and a
+        # short video (the 6 s demo) ended before the first captured frame.
+        # So hold it at the start until the capture is live, then play().
+        player.session.js(f"{v}.pause(); {v}.currentTime = 0")
+
         if not gesture(sess, ADAPTER.fullscreen_js(rect)):
             raise ItemFailed("fullscreen failed")
         time.sleep(4)
@@ -537,8 +544,10 @@ def record_one(item, index, obs, speed, args):
             player.session.js(f"{v}.playbackRate = {speed}")
             print(f"    playbackRate = {state(player)['rate']}")
 
-        obs.start_record()
+        obs.start_record()         # returns once the capture is actually writing
+        player.session.js(f"{v}.play()")
         t_started = time.time()
+        st = state(player)
         # generous ceiling so a wedged player cannot record forever
         budget = duration / speed * 1.25 + 180
         last_t, last_move = st["t"], time.time()
